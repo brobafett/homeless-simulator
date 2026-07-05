@@ -6,7 +6,7 @@ Built with plain HTML, CSS, and JavaScript. No frameworks, no build step, no dep
 
 ## Playing
 
-Open `index.html` in a browser. That's it.
+**[Play it in your browser](https://brobafett.github.io/homeless-simulator/)** — or clone the repo and open `index.html`. That's it.
 
 ### Game modes
 
