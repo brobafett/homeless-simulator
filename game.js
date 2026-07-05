@@ -546,6 +546,98 @@ const scenarios = [
         effects: { warmth: 10, mentalFortitude: -10, timePassed: 1 },
         choices: [ { text: "Leave when the rain stops.", nextScenario: null } ]
     },
+    // The Way Out: quest chain to make Goal Mode winnable (mailing address -> birth certificate -> ID -> clean clothes)
+    {
+        id: 'day_center',
+        notRandom: false,
+        weight: 3,
+        condition: () => state.mode === 'goal' && !state.flags.hasMailingAddress && state.timeHour >= 9 && state.timeHour <= 16,
+        text: "You pass the Hopewell Day Center — a squat brick building with a hand-painted sign. Inside there's coffee, a bathroom, and a volunteer at a folding table. She mentions they run a free mail service: you can use the center's address to receive letters, no questions asked.",
+        effects: { warmth: 5, timePassed: 0.2 },
+        choices: [
+            { text: "Sign up for the mail service.", effects: { mentalFortitude: 10, timePassed: 1, flags: { hasMailingAddress: true } }, nextScenario: 'day_center_signed' },
+            { text: "Grab a free coffee and keep moving.", effects: { warmth: 10, timePassed: 0.5 }, nextScenario: null }
+        ]
+    },
+    {
+        id: 'day_center_signed',
+        notRandom: true,
+        text: "The volunteer writes your name in a ledger and hands you a card with the center's address on it. 'Check back whenever we're open.' For the first time in months, you have an address. It's a start. Now you need $25 and a library computer to order your birth certificate.",
+        choices: [ { text: "Step back outside.", nextScenario: null } ]
+    },
+    {
+        id: 'order_birth_cert',
+        notRandom: false,
+        weight: 3,
+        condition: () => state.mode === 'goal' && state.flags.hasMailingAddress && !state.flags.birthCertOrdered && !state.hasID && state.timeHour >= 9 && state.timeHour <= 19,
+        text: "The library is warm and quiet. With the day center's address card in your pocket, you could finally order a replacement birth certificate from the state records office. Expedited processing costs $25 and takes a few days to arrive.",
+        effects: { warmth: 5, timePassed: 0.2 },
+        choices: [
+            {
+                text: "Order the birth certificate ($25.00).",
+                requires: { cash: 25.00 },
+                customAction: () => {
+                    state.flags.birthCertOrdered = true;
+                    state.flags.birthCertArrivesDay = state.day + 3;
+                    applyEffects({ cash: -25.00, mentalFortitude: 15, timePassed: 1 });
+                    loadScenario('birth_cert_ordered');
+                }
+            },
+            { text: "You can't spare the money right now. Leave.", nextScenario: null }
+        ]
+    },
+    {
+        id: 'birth_cert_ordered',
+        notRandom: true,
+        text: "You submit the form and write the confirmation number on the back of the day center's card. Estimated delivery: 3 days. For once, the system is working for you instead of against you. Check the day center's mail in a few days.",
+        choices: [ { text: "Log off and head out.", nextScenario: null } ]
+    },
+    {
+        id: 'mail_arrives',
+        notRandom: false,
+        weight: 4,
+        condition: () => state.mode === 'goal' && state.flags.birthCertOrdered && !state.flags.hasBirthCert && state.day >= state.flags.birthCertArrivesDay && state.timeHour >= 9 && state.timeHour <= 16,
+        text: "You stop by the Hopewell Day Center to check the mail. The volunteer flips through a plastic bin and smiles as she hands you a stiff envelope from the state records office. Your birth certificate. Proof that you exist.",
+        effects: { mentalFortitude: 20, timePassed: 0.5, flags: { hasBirthCert: true } },
+        choices: [ { text: "Tuck it somewhere safe. Next stop: the DMV.", nextScenario: null } ]
+    },
+    {
+        id: 'dmv_visit',
+        notRandom: false,
+        weight: 3,
+        condition: () => state.mode === 'goal' && state.flags.hasBirthCert && !state.hasID && state.timeHour >= 9 && state.timeHour <= 15,
+        text: "The DMV. The line snakes out the door and the fluorescent lights hum. You have your birth certificate and the day center's address. A state ID costs $20 and the wait looks like hours.",
+        effects: { timePassed: 0.2 },
+        choices: [
+            { text: "Wait in line and pay for the ID ($20.00).", requires: { cash: 20.00 }, effects: { cash: -20.00, warmth: -10, hunger: -15, mentalFortitude: 10, timePassed: 3, hasID: true }, nextScenario: 'dmv_success' },
+            { text: "You can't face that line today. Leave.", nextScenario: null }
+        ]
+    },
+    {
+        id: 'dmv_success',
+        notRandom: true,
+        text: "Three hours later, a clerk hands you a laminated card, still warm from the printer. Your own face looks back at you. You exist again, officially. Doors that were closed — shelters, clinics, real jobs, housing — just cracked open.",
+        choices: [ { text: "Step outside, standing a little taller.", nextScenario: null } ]
+    },
+    {
+        id: 'clothing_closet',
+        notRandom: false,
+        weight: 3,
+        condition: () => state.mode === 'goal' && !state.hasCleanClothes && state.timeHour >= 9 && state.timeHour <= 17,
+        text: "A church basement runs a clothing closet today — a line of folding tables stacked with donated clothes. There's a wait, but it's free. Two blocks over, a thrift store sells clean, interview-ready outfits for cash.",
+        effects: { timePassed: 0.1 },
+        choices: [
+            { text: "Wait in line at the clothing closet.", effects: { warmth: -15, hunger: -10, mentalFortitude: 10, timePassed: 2, hasCleanClothes: true }, nextScenario: 'clothes_found' },
+            { text: "Buy an outfit at the thrift store ($15.00).", requires: { cash: 15.00 }, effects: { cash: -15.00, mentalFortitude: 15, timePassed: 1, hasCleanClothes: true }, nextScenario: 'clothes_found' },
+            { text: "Not today.", nextScenario: null }
+        ]
+    },
+    {
+        id: 'clothes_found',
+        notRandom: true,
+        text: "Clean jeans, a warm shirt, a jacket without holes. You change in a restroom and catch your reflection in the mirror. You look like someone a landlord might actually rent to.",
+        choices: [ { text: "Keep moving.", nextScenario: null } ]
+    },
     // Placeholder transition scenarios
     {
         id: "caseworker_confrontation",
@@ -557,9 +649,9 @@ const scenarios = [
     {
         id: "library_research",
         notRandom: true,
-        text: "You use a public computer for 30 minutes. You learn that a replacement ID requires a birth certificate, which costs $25 to order, and takes 4 weeks to arrive by mail. You also need a mailing address. It feels impossible.",
-        effects: { mentalFortitude: -15, timePassed: 1 },
-        choices: [ { text: "Log off and go back outside.", nextScenario: null } ]
+        text: "You use a public computer for 30 minutes. You learn that a replacement ID requires a birth certificate, which costs $25 to order with expedited processing. You also need a mailing address. It feels impossible — until you spot a flyer taped to the monitor: the Hopewell Day Center offers a free mail service for people without an address.",
+        effects: { mentalFortitude: -10, timePassed: 1 },
+        choices: [ { text: "Log off. Maybe there's a way after all.", nextScenario: null } ]
     },
     {
         id: "library_stay_quiet",
@@ -610,6 +702,8 @@ function applyEffects(effects) {
     if (effects.warmth !== undefined) state.warmth += effects.warmth;
     if (effects.hunger !== undefined) state.hunger += effects.hunger;
     if (effects.cash !== undefined) state.cash += effects.cash;
+    if (effects.hasID !== undefined) state.hasID = effects.hasID;
+    if (effects.hasCleanClothes !== undefined) state.hasCleanClothes = effects.hasCleanClothes;
     if (effects.flags !== undefined) {
         for (const [key, value] of Object.entries(effects.flags)) {
             state.flags[key] = value;
@@ -664,10 +758,12 @@ function loadScenario(id) {
     if (id) {
         scenario = scenarios.find(s => s.id === id);
     } else {
-        const randomPool = scenarios.filter(s => {
-            if (s.notRandom) return false;
-            if (s.condition && !s.condition()) return false;
-            return true;
+        const randomPool = [];
+        scenarios.forEach(s => {
+            if (s.notRandom) return;
+            if (s.condition && !s.condition()) return;
+            const weight = s.weight || 1;
+            for (let i = 0; i < weight; i++) randomPool.push(s);
         });
         scenario = randomPool[Math.floor(Math.random() * randomPool.length)];
     }

@@ -16,12 +16,13 @@ Everything hangs off two things: the global `state` object (top of file) and the
 
 **Scenario schema:**
 - `id`, `notRandom` (true = only reachable via `nextScenario`/`loadScenario(id)`, typically outcome/transition scenes)
-- `condition: () => bool` — gates random selection (time of day, flags, etc.)
+- `condition: () => bool` — gates random selection (time of day, flags, mode, etc.)
+- `weight` — optional, default 1; duplicates the scenario in the random pool so it's drawn more often (quest steps use 3–4)
 - `text` — string or `() => string` for state-dependent narration
 - `effects` — applied on scenario *entry*
-- `choices[]` — each with `text`, optional `requires` (`cash`/`mentalFortitude`/etc. — unmet requirements render the button disabled), `effects`, and one of `nextScenario` / `customAction`
+- `choices[]` — each with `text`, optional `requires` (`cash`/`mentalFortitude` — unmet requirements render the button disabled), `effects`, and one of `nextScenario` / `customAction`
 
-**Effects system (`applyEffects`):** mutates stats, then advances time. `timePassed` defaults to 1 hour if omitted; it's multiplied by `state.timeModifier` and drives passive warmth/hunger drain scaled by `state.difficultyMultiplier` (endless mode adds +0.08/day). Stats clamp to 0–100, except warmth which clamps to `state.maxWarmthCapacity` (permanently changed by coat/sleeping-bag scenarios). One-time events use `state.flags` plus a `flags` key in effects.
+**Effects system (`applyEffects`):** mutates stats, then advances time. `timePassed` defaults to 1 hour if omitted; it's multiplied by `state.timeModifier` and drives passive warmth/hunger drain scaled by `state.difficultyMultiplier` (endless mode adds +0.08/day). Stats clamp to 0–100, except warmth which clamps to `state.maxWarmthCapacity` (permanently changed by coat/sleeping-bag scenarios). One-time events use `state.flags` plus a `flags` key in effects. Effect keys `hasID` and `hasCleanClothes` set the win-condition booleans directly. Flag values that depend on runtime state (e.g. `birthCertArrivesDay = state.day + 3`) can't go in a static `effects` object — use `customAction` for those.
 
 **Naming trap:** the effect key is `mentalFortitude` but the state field is `state.mental`. `requires` checks also use `mentalFortitude`. Keep using `mentalFortitude` in scenario definitions.
 
@@ -29,9 +30,11 @@ Everything hangs off two things: the global `state` object (top of file) and the
 
 **Modes:** `'goal'` (win at $1200 + `hasID` + `hasCleanClothes`) and `'endless'` (survive; difficulty scales daily). Loss conditions live in `checkGameStatus()` and are duplicated inline in `loadScenario()` — change both if you change death rules.
 
-## Known gap
+## Goal Mode win path
 
-Goal Mode is currently unwinnable: nothing in any scenario ever sets `state.hasID` or `state.hasCleanClothes` (the ID quest chain `intake_appointment` → `library_research` dead-ends). If adding win-path content, these are the missing hooks.
+The quest chain (scenario ids, all gated to `state.mode === 'goal'`): `day_center` (mailing address flag) → `order_birth_cert` at the library ($25, sets `birthCertArrivesDay = day + 3`) → `mail_arrives` → `dmv_visit` ($20, sets `hasID`) → plus `clothing_closet` ($15 or free with a wait, sets `hasCleanClothes`). Victory fires in `checkGameStatus()` once cash ≥ $1200 with both items. When touching these scenarios, keep the flag ordering intact — each step's `condition` assumes the previous step's flag.
+
+Run `node test/win-path.test.js` after touching the engine or quest chain — it drives the full win path against a stubbed DOM and checks scenario gating. For anything visual, verify by playing in the browser (`loadScenario(id)` in the console jumps to a specific scenario).
 
 ## Tone
 
