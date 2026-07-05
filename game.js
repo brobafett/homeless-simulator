@@ -107,15 +107,21 @@ function resolveShelter() {
         advanceDay();
         state.timeHour = 8;
     }
-    
+
     state.health = 100;
     state.hunger = 100;
     state.mental = 100;
     state.warmth = state.maxWarmthCapacity;
-    
+
+    let referralMsg = "";
+    if (!state.flags.hasShelterReferral) {
+        state.flags.hasShelterReferral = true;
+        referralMsg = " On your way out, the intake worker stamps a slip of paper and presses it into your hand: a referral to the free health clinic. 'Hold onto that. They won't see you without it.'";
+    }
+
     renderStats();
-    
-    document.getElementById('narrative-text').innerHTML = `<p>You got a warm bed for the night. You wake up feeling fully rested and ready to face a new day.</p>`;
+
+    document.getElementById('narrative-text').innerHTML = `<p>You got a warm bed for the night. You wake up feeling fully rested and ready to face a new day.${referralMsg}</p>`;
     
     const choicesContainer = document.getElementById('choices-list');
     choicesContainer.innerHTML = `
@@ -293,6 +299,7 @@ const scenarios = [
     {
         id: 'shoe_blowout',
         notRandom: false,
+        condition: () => !state.flags.hasNewShoes,
         text: "Disaster. The worn-out sole of your right shoe finally tears completely off. Walking on the exposed pavement is agonizing.",
         effects: { mentalFortitude: -20, timePassed: 0 },
         choices: [
@@ -366,9 +373,17 @@ const scenarios = [
         notRandom: true,
         text: "The receptionist asks for an ID and insurance card. When you explain your situation, they say they can only see you if you have a referral from a shelter.",
         choices: [
+            { text: "Hand over the referral slip from the downtown shelter.", requires: { flag: 'hasShelterReferral', flagLabel: '(Requires a shelter referral)' }, nextScenario: 'clinic_treated' },
             { text: "Argue that you need help now.", requires: { mentalFortitude: 50 }, nextScenario: 'clinic_argue' },
             { text: "Leave quietly.", effects: { mentalFortitude: -5 }, nextScenario: null }
         ]
+    },
+    {
+        id: 'clinic_treated',
+        notRandom: true,
+        text: "The receptionist checks the slip and waves you back. A doctor listens to your chest, prescribes antibiotics from the sample cabinet, and dresses the blisters on your feet. Real medical care, no arguing required.",
+        effects: { health: 40, mentalFortitude: 15, timePassed: 2 },
+        choices: [ { text: "Leave feeling better than you have in weeks.", nextScenario: null } ]
     },
     {
         id: 'clinic_argue',
@@ -669,6 +684,78 @@ const scenarios = [
         text: "Clean jeans, a warm shirt, a jacket without holes. You change in a restroom and catch your reflection in the mirror. You look like someone a landlord might actually rent to.",
         choices: [ { text: "Keep moving.", nextScenario: null } ]
     },
+    // Gear upgrades and steady employment
+    {
+        id: 'shoe_store',
+        notRandom: false,
+        weight: 2,
+        condition: () => !state.flags.hasWorkBoots && state.timeHour >= 9 && state.timeHour <= 18,
+        text: () => state.flags.hasNewShoes ?
+            "You pass the discount shoe outlet again. Your sneakers are holding up, but the steel-toe work boots in the window would open up construction work at the labor office." :
+            "A discount shoe outlet has a clearance rack out front. Your own footwear is one bad step from falling apart. Decent shoes would change your days; the steel-toe work boots in the window would open up construction work.",
+        effects: { timePassed: 0.1 },
+        choices: [
+            {
+                text: "Buy a solid pair of used sneakers ($12.00).",
+                requires: { cash: 12.00 },
+                customAction: () => {
+                    state.flags.hasNewShoes = true;
+                    state.timeModifier = 1.0;
+                    applyEffects({ cash: -12.00, mentalFortitude: 10, timePassed: 0.5 });
+                    loadScenario('shoes_bought');
+                }
+            },
+            {
+                text: "Invest in steel-toe work boots ($35.00).",
+                requires: { cash: 35.00 },
+                customAction: () => {
+                    state.flags.hasNewShoes = true;
+                    state.flags.hasWorkBoots = true;
+                    state.timeModifier = 1.0;
+                    applyEffects({ cash: -35.00, mentalFortitude: 15, timePassed: 0.5 });
+                    loadScenario('boots_bought');
+                }
+            },
+            { text: "Your money is needed elsewhere.", nextScenario: null }
+        ]
+    },
+    {
+        id: 'shoes_bought',
+        notRandom: true,
+        text: "You lace up the sneakers and leave your old wrecked pair in the store's trash can. Walking doesn't hurt anymore. It's amazing how much of survival comes down to your feet.",
+        choices: [ { text: "Walk on, faster than before.", nextScenario: null } ]
+    },
+    {
+        id: 'boots_bought',
+        notRandom: true,
+        text: "The boots are heavy, warm, and tough as nails. With these, the dispatcher at the day labor office will let you take the construction tickets — the ones that actually pay.",
+        choices: [ { text: "Break them in.", nextScenario: null } ]
+    },
+    {
+        id: 'labor_office',
+        notRandom: false,
+        weight: 2,
+        condition: () => state.timeHour >= 6 && state.timeHour <= 10,
+        text: "The day labor office on 3rd Street opens at dawn. Workers fill the plastic chairs while the dispatcher calls out tickets. General labor pays $10 an hour; the construction site tickets pay $15, but the dispatcher won't hand one over unless you're wearing steel-toe boots.",
+        effects: { timePassed: 0.2 },
+        choices: [
+            { text: "Take a general labor ticket — moving furniture (4 hrs, $40.00).", requires: { health: 40, hunger: 30 }, effects: { cash: 40.00, health: -10, hunger: -25, mentalFortitude: 5, timePassed: 4 }, nextScenario: 'labor_done_general' },
+            { text: "Take a construction site ticket (6 hrs, $90.00).", requires: { flag: 'hasWorkBoots', flagLabel: '(Requires work boots)', health: 50, hunger: 40 }, effects: { cash: 90.00, health: -20, hunger: -40, warmth: 10, mentalFortitude: 10, timePassed: 6 }, nextScenario: 'labor_done_construction' },
+            { text: "Leave. You're in no shape to work today.", nextScenario: null }
+        ]
+    },
+    {
+        id: 'labor_done_general',
+        notRandom: true,
+        text: "Four hours of hauling couches and boxes up apartment stairs. Your back aches, but the dispatcher counts two twenties into your palm. Honest money.",
+        choices: [ { text: "Pocket the cash and stretch your back.", nextScenario: null } ]
+    },
+    {
+        id: 'labor_done_construction',
+        notRandom: true,
+        text: "Six hours on the site — hauling block, clearing debris, staying out of the crane's way. The foreman nods at your boots and says there's usually work for people who show up. $90, cash.",
+        choices: [ { text: "Head out, exhausted but flush.", nextScenario: null } ]
+    },
     // Placeholder transition scenarios
     {
         id: "caseworker_confrontation",
@@ -836,6 +923,9 @@ function loadScenario(id) {
             if (choice.requires) {
                 if (choice.requires.cash !== undefined && state.cash < choice.requires.cash) { reqMet = false; reqMsg = `(Requires $${choice.requires.cash.toFixed(2)})`; }
                 if (choice.requires.mentalFortitude !== undefined && state.mental < choice.requires.mentalFortitude) { reqMet = false; reqMsg = `(Requires ${choice.requires.mentalFortitude}% Mental Fortitude)`; }
+                if (choice.requires.health !== undefined && state.health < choice.requires.health) { reqMet = false; reqMsg = `(Requires ${choice.requires.health}% Health)`; }
+                if (choice.requires.hunger !== undefined && state.hunger < choice.requires.hunger) { reqMet = false; reqMsg = `(Requires ${choice.requires.hunger}% Hunger)`; }
+                if (choice.requires.flag !== undefined && !state.flags[choice.requires.flag]) { reqMet = false; reqMsg = choice.requires.flagLabel || '(Unavailable)'; }
             }
             
             if (reqMet) {

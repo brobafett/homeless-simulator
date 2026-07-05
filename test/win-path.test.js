@@ -115,6 +115,45 @@ loadScenario('find_shelter');
 const motelBtn = els['choices-list'].children.find(b => b.textContent.includes('motel'));
 assert(motelBtn && motelBtn.disabled, 'motel choice disabled when broke');
 
+// --- Requirements: health and flag gating enforced on choices ---
+state.mode = 'goal'; state.flags = {};
+topUp(); state.cash = 0; state.health = 20;
+loadScenario('labor_office');
+const generalBtn = els['choices-list'].children.find(b => b.textContent.includes('general labor'));
+assert(generalBtn && generalBtn.disabled, 'general labor ticket disabled at 20% health');
+const constructionBtn = els['choices-list'].children.find(b => b.textContent.includes('construction'));
+assert(constructionBtn && constructionBtn.disabled && constructionBtn.textContent.includes('work boots'), 'construction ticket disabled without work boots');
+
+// --- Shoe store: boots unlock the better-paying construction gig ---
+topUp(); state.cash = 50;
+loadScenario('shoe_store');
+clickChoice('work boots');
+assert(state.flags.hasWorkBoots === true && state.flags.hasNewShoes === true, 'buying boots sets footwear flags');
+assert(Math.abs(state.cash - 15) < 0.01, 'boots cost $35 (cash now $' + state.cash.toFixed(2) + ')');
+topUp();
+loadScenario('labor_office');
+clickChoice('construction');
+assert(Math.abs(state.cash - 105) < 0.01, 'construction gig paid $90 (cash now $' + state.cash.toFixed(2) + ')');
+
+// --- New shoes prevent shoe blowouts ---
+let blowout = false;
+for (let i = 0; i < 300; i++) {
+    topUp();
+    loadScenario();
+    if (els['narrative-text'].innerHTML.includes('sole of your right shoe')) blowout = true;
+}
+assert(!blowout, 'shoe_blowout never occurs once you own decent shoes');
+
+// --- Shelter stay grants clinic referral; referral gets treatment ---
+state.flags = {}; topUp(); state.cash = 0; state.timeHour = 20;
+loadScenario('find_shelter');
+clickChoice('downtown shelter');
+assert(state.flags.hasShelterReferral === true, 'shelter stay granted a clinic referral');
+topUp(); state.health = 50;
+loadScenario('clinic_desk');
+clickChoice('referral slip');
+assert(state.health > 80, 'clinic treated you via the referral (health now ' + Math.floor(state.health) + ')');
+
 // --- Random pool sanity: conditions gate quest steps correctly ---
 // Fresh-ish state: reset relevant fields
 state.mode = 'goal'; state.hasID = false; state.hasCleanClothes = false; state.flags = {};
