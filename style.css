@@ -1,0 +1,272 @@
+:root {
+    --bg-color: #0d0d0f;
+    --panel-bg: #151518;
+    --text-primary: #e5e5e5;
+    --text-secondary: #909090;
+    --accent-color: #d84b4b;
+    --hover-color: #222228;
+    --border-color: #2a2a30;
+}
+
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    background-color: var(--bg-color);
+    color: var(--text-primary);
+    font-family: 'Inter', sans-serif;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+    overflow: hidden;
+}
+
+.app-container {
+    display: flex;
+    width: 100%;
+    max-width: 1200px;
+    height: 100vh;
+    background-color: var(--bg-color);
+}
+
+.dashboard {
+    width: 300px;
+    background-color: var(--panel-bg);
+    padding: 2rem;
+    border-right: 1px solid var(--border-color);
+    display: flex;
+    flex-direction: column;
+    gap: 2rem;
+    box-shadow: 4px 0 15px rgba(0, 0, 0, 0.5);
+    z-index: 10;
+}
+
+.dashboard h2 {
+    font-size: 1.5rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    color: var(--text-secondary);
+    border-bottom: 2px solid var(--border-color);
+    padding-bottom: 1rem;
+}
+
+.stat-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.stat-card {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: rgba(255, 255, 255, 0.02);
+    padding: 1rem;
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.04);
+    transition: background 0.3s ease;
+}
+
+.stat-card:hover {
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.stat-label {
+    font-weight: 600;
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+    text-transform: uppercase;
+}
+
+.stat-value {
+    font-weight: 700;
+    font-size: 1.1rem;
+    color: var(--text-primary);
+    transition: color 0.3s ease, text-shadow 0.3s ease;
+}
+
+.stat-value.danger {
+    color: var(--accent-color);
+    text-shadow: 0 0 10px rgba(216, 75, 75, 0.3);
+}
+
+.game-area {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    padding: 3rem;
+    overflow-y: auto;
+    gap: 2rem;
+}
+
+.narrative-box {
+    background: linear-gradient(145deg, #131316, #1a1a1f);
+    padding: 2.5rem;
+    border-radius: 12px;
+    font-size: 1.25rem;
+    line-height: 1.6;
+    border: 1px solid var(--border-color);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+    min-height: 200px;
+    display: flex;
+    align-items: center;
+}
+
+.choices-container {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.choice-btn {
+    background-color: transparent;
+    color: var(--text-primary);
+    border: 1px solid var(--border-color);
+    padding: 1.25rem;
+    text-align: left;
+    font-size: 1rem;
+    font-family: inherit;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    position: relative;
+    overflow: hidden;
+}
+
+.choice-btn::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 3px;
+    height: 100%;
+    background-color: var(--text-secondary);
+    transform: scaleY(0);
+    transition: transform 0.2s ease, background-color 0.2s ease;
+    transform-origin: bottom;
+}
+
+.choice-btn:hover {
+    background-color: var(--hover-color);
+    border-color: #444;
+    padding-left: 1.75rem;
+}
+
+.choice-btn:hover::before {
+    transform: scaleY(1);
+    background-color: var(--text-primary);
+}
+
+.choice-btn:active {
+    transform: scale(0.99);
+}
+
+@media (max-width: 768px) {
+    .app-container {
+        flex-direction: column;
+    }
+    
+    .dashboard {
+        width: 100%;
+        border-right: none;
+        border-bottom: 1px solid var(--border-color);
+        padding: 1rem;
+        position: sticky;
+        top: 0;
+    }
+    
+    .stat-grid {
+        flex-direction: row;
+        flex-wrap: wrap;
+    }
+    
+    .stat-card {
+        flex: 1 1 calc(33.333% - 1rem);
+    }
+    
+    .game-area {
+        padding: 1.5rem;
+    }
+}
+
+/* Title Screen */
+.title-screen {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+    width: 100vw;
+    background: radial-gradient(circle at center, #1a1a24 0%, var(--bg-color) 100%);
+    text-align: center;
+    padding: 2rem;
+}
+
+.game-title {
+    font-size: 4rem;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin-bottom: 0.5rem;
+    letter-spacing: -1px;
+}
+
+.subtitle {
+    font-size: 1.5rem;
+    color: var(--text-secondary);
+    margin-bottom: 4rem;
+}
+
+.mode-selection {
+    display: flex;
+    gap: 2rem;
+    max-width: 800px;
+}
+
+.mode-btn {
+    padding: 2rem;
+    font-size: 1.25rem;
+}
+
+.mode-btn strong {
+    display: block;
+    font-size: 1.5rem;
+    margin-bottom: 0.5rem;
+    color: var(--accent-color);
+}
+
+.mode-btn small {
+    color: var(--text-secondary);
+    font-size: 1rem;
+}
+
+/* Mode UI Elements */
+#housing-checklist h3, #endless-counter h3 {
+    font-size: 1.2rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+    border-bottom: 1px solid var(--border-color);
+    padding-bottom: 0.5rem;
+    margin-bottom: 1rem;
+    margin-top: 1rem;
+}
+
+.checklist {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    font-size: 0.95rem;
+}
+
+.day-counter-display {
+    font-size: 3rem;
+    font-weight: 700;
+    color: var(--accent-color);
+    text-align: center;
+    text-shadow: 0 0 15px rgba(216, 75, 75, 0.4);
+}

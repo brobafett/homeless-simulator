@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Homelessness Survival Simulator</title>
+    <link rel="stylesheet" href="style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="title-screen" id="title-screen">
+        <h1 class="game-title">The Streets</h1>
+        <p class="subtitle">A Survival Simulator</p>
+        <div class="mode-selection">
+            <button class="choice-btn mode-btn" onclick="startGame('goal')">
+                <strong>The Way Out (Goal Mode)</strong><br>
+                <small>Save $1200, get an ID, and find clean clothes to break the cycle.</small>
+            </button>
+            <button class="choice-btn mode-btn" onclick="startGame('endless')">
+                <strong>Endure (Endless Mode)</strong><br>
+                <small>Survive as long as you can. Weather gets harsher every day.</small>
+            </button>
+        </div>
+    </div>
+
+    <div class="app-container" id="game-screen" style="display: none;">
+        <aside class="dashboard">
+            <h2>Status</h2>
+            <div class="stat-grid">
+                <div class="stat-card">
+                    <span class="stat-label">Health</span>
+                    <span class="stat-value" id="stat-health">100%</span>
+                </div>
+                <div class="stat-card">
+                    <span class="stat-label">Mental</span>
+                    <span class="stat-value" id="stat-mental">100%</span>
+                </div>
+                <div class="stat-card">
+                    <span class="stat-label">Warmth</span>
+                    <span class="stat-value" id="stat-warmth">100%</span>
+                </div>
+                <div class="stat-card">
+                    <span class="stat-label">Hunger</span>
+                    <span class="stat-value" id="stat-hunger">100%</span>
+                </div>
+                <div class="stat-card">
+                    <span class="stat-label">Cash</span>
+                    <span class="stat-value" id="stat-cash">$0.00</span>
+                </div>
+                <div class="stat-card">
+                    <span class="stat-label">Time</span>
+                    <span class="stat-value" id="stat-time">08:00</span>
+                </div>
+            </div>
+
+            <div id="housing-checklist" style="display: none;">
+                <h3>Housing Requirements</h3>
+                <ul class="checklist">
+                    <li><span id="check-cash">[ ]</span> Save $1200</li>
+                    <li><span id="check-id">[ ]</span> Obtain state-issued ID</li>
+                    <li><span id="check-clothes">[ ]</span> Secure clean clothes</li>
+                </ul>
+            </div>
+            
+            <div id="endless-counter" style="display: none;">
+                <h3>Days Survived</h3>
+                <div class="day-counter-display" id="day-counter-val">1</div>
+            </div>
+        </aside>
+        
+        <main class="game-area">
+            <div class="narrative-box" id="narrative-text">
+                <p>Welcome to the simulator. It's a cold morning. You need to find a way to survive the day.</p>
+            </div>
+            
+            <div class="choices-container" id="choices-list">
+                <!-- Choices will be injected here by game.js -->
+            </div>
+        </main>
+    </div>
+    <script src="game.js"></script>
+</body>
+</html>
