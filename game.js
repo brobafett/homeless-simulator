@@ -6,6 +6,7 @@ let state = {
     warmth: 100,
     hunger: 100,
     hygiene: 100,
+    foodStash: 0,
     cash: 0.00,
     timeHour: 8, // Starts at 8:00 AM
     day: 1,
@@ -16,6 +17,13 @@ let state = {
     hasCleanClothes: false,
     flags: {}
 };
+
+// How many packed meals your current bag can hold
+function carryCapacity() {
+    if (state.flags.hasSturdyBackpack) return 4;
+    if (state.flags.backpackBroken) return 1; // plastic grocery bag
+    return 2; // worn or scavenged backpack
+}
 
 function startGame(mode) {
     state.mode = mode;
@@ -132,8 +140,24 @@ function resolveShelter() {
     `;
 }
 
-function resolveMotel() {
-    state.cash = Math.max(0, state.cash - 45);
+const ROOM_TIERS = {
+    flophouse: {
+        cost: 18, health: 90, mental: 80, hunger: 85, hygiene: 70,
+        msg: "A canvas cot in a room full of snoring strangers, a shared bathroom down the hall, and a mattress you try not to think about. You sleep with your shoes on and one eye open — but you sleep."
+    },
+    motel: {
+        cost: 45, health: 100, mental: 100, hunger: 100, hygiene: 100,
+        msg: "A hot shower, a real mattress, a door that locks. You raid the vending machine, sleep nine unbroken hours, and wake up feeling almost like your old self."
+    },
+    hotel: {
+        cost: 85, health: 100, mental: 100, hunger: 100, hygiene: 100, breakfast: true,
+        msg: "Crisp sheets, a rainfall shower, towels that smell like nothing at all. In the morning you eat like a king at the breakfast buffet and quietly wrap extra food for the road."
+    }
+};
+
+function resolveRoom(tier) {
+    const room = ROOM_TIERS[tier];
+    state.cash = Math.max(0, state.cash - room.cost);
 
     if (state.timeHour < 8) {
         state.timeHour = 8;
@@ -142,15 +166,16 @@ function resolveMotel() {
         state.timeHour = 8;
     }
 
-    state.health = 100;
-    state.hunger = 100;
-    state.mental = 100;
+    state.health = room.health;
+    state.hunger = room.hunger;
+    state.mental = room.mental;
     state.warmth = state.maxWarmthCapacity;
-    state.hygiene = 100;
+    state.hygiene = room.hygiene;
+    if (room.breakfast) state.foodStash = Math.min(carryCapacity(), state.foodStash + 1);
 
     renderStats();
 
-    document.getElementById('narrative-text').innerHTML = `<p>A hot shower, a real mattress, a door that locks. You raid the vending machine, sleep nine unbroken hours, and wake up feeling almost like your old self.</p>`;
+    document.getElementById('narrative-text').innerHTML = `<p>${room.msg}</p>`;
 
     const choicesContainer = document.getElementById('choices-list');
     choicesContainer.innerHTML = `
@@ -179,7 +204,9 @@ const scenarios = [
             { text: "Visit the busy intersection to panhandle.", effects: { health: -2, mentalFortitude: -5, warmth: -15, hunger: -10, cash: 5.00 } },
             { text: "Buy hot soup from a local deli ($3.00)", requires: { cash: 3.00 }, effects: { cash: -3.00, health: 5, mentalFortitude: 15, warmth: 35, hunger: 40 } },
             { text: "Get a cup of hot coffee ($1.00)", requires: { cash: 1.00 }, effects: { cash: -1.00, health: 2, mentalFortitude: 15, warmth: 20, hunger: 5 } },
-            { text: "Sit down for a full hot meal at the diner ($8.00)", requires: { cash: 8.00 }, effects: { cash: -8.00, health: 10, mentalFortitude: 20, warmth: 30, hunger: 70 } }
+            { text: "Sit down for a full hot meal at the diner ($8.00)", requires: { cash: 8.00 }, effects: { cash: -8.00, health: 10, mentalFortitude: 20, warmth: 30, hunger: 70 } },
+            { text: "Buy a to-go meal to pack for later ($4.00)", requires: { cash: 4.00, stashSpace: true }, effects: { cash: -4.00, foodStash: 1, timePassed: 0.3 } },
+            { text: "Eat a packed meal from your bag.", requires: { stash: 1 }, effects: { foodStash: -1, hunger: 35, mentalFortitude: 5, timePassed: 0.3 } }
         ]
     },
     {
@@ -200,7 +227,18 @@ const scenarios = [
                 }
             },
             { text: "Hunker down in an abandoned building.", effects: { health: -5, mentalFortitude: -5, warmth: 15, hunger: -10 } },
-            { text: "Get a motel room for the night ($45.00).", requires: { cash: 45.00 }, customAction: () => resolveMotel() }
+            { text: "Rent a room for the night (from $18.00).", requires: { cash: 18.00 }, nextScenario: 'rent_room' }
+        ]
+    },
+    {
+        id: 'rent_room',
+        notRandom: true,
+        text: "A few blocks apart, three signs glow against the dark: THE ALCOVE — BEDS $18, a budget motel with a flickering VACANCY sign at $45, and the Grandview Hotel, warm light spilling from its lobby, $85 a night.",
+        choices: [
+            { text: "A bunk at the Alcove flophouse ($18.00).", requires: { cash: 18.00 }, customAction: () => resolveRoom('flophouse') },
+            { text: "A room at the budget motel ($45.00).", requires: { cash: 45.00 }, customAction: () => resolveRoom('motel') },
+            { text: "A night at the Grandview Hotel ($85.00).", requires: { cash: 85.00 }, customAction: () => resolveRoom('hotel') },
+            { text: "Too rich for tonight. Reconsider your options.", customAction: () => loadScenario('find_shelter') }
         ]
     },
     {
@@ -228,7 +266,8 @@ const scenarios = [
             }},
             { text: "Read a discarded newspaper to stay sharp.", effects: { health: 0, mentalFortitude: 20, warmth: -10, hunger: -10 } },
             { text: "Warm up with a cup of hot soup ($3.00)", requires: { cash: 3.00 }, effects: { cash: -3.00, health: 5, mentalFortitude: 15, warmth: 35, hunger: 30 } },
-            { text: "Get a cup of hot coffee ($1.00)", requires: { cash: 1.00 }, effects: { cash: -1.00, health: 2, mentalFortitude: 15, warmth: 20, hunger: 5 } }
+            { text: "Get a cup of hot coffee ($1.00)", requires: { cash: 1.00 }, effects: { cash: -1.00, health: 2, mentalFortitude: 15, warmth: 20, hunger: 5 } },
+            { text: "Eat a packed meal from your bag.", requires: { stash: 1 }, effects: { foodStash: -1, hunger: 35, mentalFortitude: 5, timePassed: 0.3 } }
         ]
     },
     // New Advanced Scenarios
@@ -477,6 +516,7 @@ const scenarios = [
     {
         id: 'winter_coat',
         notRandom: false,
+        condition: () => !state.flags.hasWinterCoat,
         text: "You find a clothing donation bin. The anti-theft chute is jammed open slightly. You might be able to reach your arm in and pull something out.",
         effects: { timePassed: 0.2 },
         choices: [
@@ -484,7 +524,7 @@ const scenarios = [
                 if (Math.random() < 0.3) {
                     loadScenario('coat_stuck');
                 } else {
-                    applyEffects({ maxWarmthCapacity: 20, warmth: 20 });
+                    applyEffects({ maxWarmthCapacity: 20, warmth: 20, flags: { hasWinterCoat: true } });
                     loadScenario('coat_success');
                 }
             }},
@@ -535,7 +575,8 @@ const scenarios = [
     {
         id: 'soup_kitchen_eat',
         notRandom: true,
-        text: "After hours of shivering, you are served a hot bowl of stew, bread, and an apple. It's the best thing you've tasted in days.",
+        text: "After hours of shivering, you are served a hot bowl of stew, bread, and an apple. It's the best thing you've tasted in days. On the way out, a volunteer presses a bagged sandwich into your hands for later.",
+        effects: { foodStash: 1, timePassed: 0 },
         choices: [ { text: "Leave with a full stomach.", nextScenario: null } ]
     },
     {
@@ -815,7 +856,8 @@ const scenarios = [
         id: 'labor_office',
         notRandom: false,
         weight: 2,
-        condition: () => state.timeHour >= 6 && state.timeHour <= 10,
+        condition: () => state.timeHour >= 6 && state.timeHour <= 10 && state.flags.lastLaborDay !== state.day,
+        onLoad: () => { state.flags.lastLaborDay = state.day; },
         text: "The day labor office on 3rd Street opens at dawn. Workers fill the plastic chairs while the dispatcher calls out tickets. General labor pays $10 an hour; the construction site tickets pay $15, but the dispatcher won't hand one over unless you're wearing steel-toe boots.",
         effects: { timePassed: 0.2 },
         choices: [
@@ -900,6 +942,7 @@ function applyEffects(effects) {
     if (effects.warmth !== undefined) state.warmth += effects.warmth;
     if (effects.hunger !== undefined) state.hunger += effects.hunger;
     if (effects.hygiene !== undefined) state.hygiene += effects.hygiene;
+    if (effects.foodStash !== undefined) state.foodStash += effects.foodStash;
     if (effects.cash !== undefined) state.cash += effects.cash;
     if (effects.hasID !== undefined) state.hasID = effects.hasID;
     if (effects.hasCleanClothes !== undefined) state.hasCleanClothes = effects.hasCleanClothes;
@@ -938,6 +981,7 @@ function applyEffects(effects) {
     state.warmth = Math.max(0, Math.min(state.maxWarmthCapacity, state.warmth));
     state.hunger = Math.max(0, Math.min(100, state.hunger));
     state.hygiene = Math.max(0, Math.min(100, state.hygiene));
+    state.foodStash = Math.max(0, Math.min(carryCapacity(), state.foodStash));
     state.cash = Math.max(0, state.cash);
 }
 
@@ -966,6 +1010,11 @@ function loadScenario(id) {
         id = 'find_shelter';
     }
 
+    // Steady work: with boots, the labor office is a guaranteed morning stop, once per day
+    if (!id && state.flags.hasWorkBoots && state.timeHour >= 6 && state.timeHour <= 10 && state.flags.lastLaborDay !== state.day) {
+        id = 'labor_office';
+    }
+
     let scenario;
     if (id) {
         scenario = scenarios.find(s => s.id === id);
@@ -983,6 +1032,8 @@ function loadScenario(id) {
     if (!scenario) {
         scenario = scenarios.find(s => s.id === 'find_meal'); // fallback
     }
+
+    if (scenario.onLoad) scenario.onLoad();
 
     if (scenario.effects) {
         applyEffects(scenario.effects);
@@ -1014,6 +1065,8 @@ function loadScenario(id) {
                 if (choice.requires.health !== undefined && state.health < choice.requires.health) { reqMet = false; reqMsg = `(Requires ${choice.requires.health}% Health)`; }
                 if (choice.requires.hunger !== undefined && state.hunger < choice.requires.hunger) { reqMet = false; reqMsg = `(Requires ${choice.requires.hunger}% Hunger)`; }
                 if (choice.requires.flag !== undefined && !state.flags[choice.requires.flag]) { reqMet = false; reqMsg = choice.requires.flagLabel || '(Unavailable)'; }
+                if (choice.requires.stash !== undefined && state.foodStash < choice.requires.stash) { reqMet = false; reqMsg = '(Nothing packed to eat)'; }
+                if (choice.requires.stashSpace && state.foodStash >= carryCapacity()) { reqMet = false; reqMsg = '(No room in your bag)'; }
             }
             
             if (reqMet) {
@@ -1050,6 +1103,31 @@ function updateElement(id, value, isDanger = false) {
     }
 }
 
+function renderGear() {
+    const list = document.getElementById('gear-list');
+    if (!list) return;
+
+    const items = [];
+    let pack = 'Worn backpack';
+    if (state.flags.hasSturdyBackpack) pack = 'Heavy-duty pack';
+    else if (state.flags.backpackBroken) pack = 'Plastic grocery bag';
+    items.push(`${pack} — meals: ${state.foodStash}/${carryCapacity()}`);
+
+    if (state.flags.hasWorkBoots) items.push('Steel-toe work boots');
+    else if (state.flags.hasNewShoes) items.push('Decent sneakers');
+    if (state.flags.hasWinterCoat) items.push('Winter coat');
+    if (state.hasCleanClothes) items.push('Clean clothes');
+    if (state.flags.hasShelterReferral) items.push('Clinic referral slip');
+    if (state.hasID) {
+        items.push('State ID');
+    } else {
+        if (state.flags.hasMailingAddress) items.push('Mailing address (Hopewell)');
+        if (state.flags.hasBirthCert) items.push('Birth certificate');
+    }
+
+    list.innerHTML = items.map(i => `<li>${i}</li>`).join('');
+}
+
 function renderStats() {
     updateElement('stat-health', `${Math.floor(state.health)}%`, state.health <= 30);
     updateElement('stat-mental', `${Math.floor(state.mental)}%`, state.mental <= 30);
@@ -1071,7 +1149,9 @@ function renderStats() {
     if (state.mode === 'endless') {
         document.getElementById('day-counter-val').textContent = state.day;
     }
-    
+
+    renderGear();
+
     checkGameOver();
 }
 

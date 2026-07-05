@@ -245,7 +245,7 @@ body {
 }
 
 /* Mode UI Elements */
-#housing-checklist h3, #endless-counter h3 {
+#housing-checklist h3, #endless-counter h3, #gear-section h3 {
     font-size: 1.2rem;
     font-weight: 600;
     color: var(--text-secondary);

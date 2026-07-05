@@ -105,16 +105,77 @@ assert(state.flags.lastShelterPromptDay === state.day, 'shelter prompt recorded 
 
 // --- Motel room: costs $45, safe night, wakes at 8 AM next day ---
 const dayBefore = state.day;
-clickChoice('motel');
+clickChoice('Rent a room');
+clickChoice('budget motel');
 assert(Math.abs(state.cash - 55) < 0.01, 'motel cost $45 (cash now $' + state.cash.toFixed(2) + ')');
 assert(state.day === dayBefore + 1 && state.timeHour === 8, 'woke at 8 AM the next day');
 assert(state.health === 100 && state.hunger === 100 && state.mental === 100 && state.hygiene === 100, 'motel fully restored stats including hygiene');
 
-// --- Motel option disabled without cash ---
+// --- Renting disabled without cash ---
 topUp(); state.cash = 10;
 loadScenario('find_shelter');
-const motelBtn = els['choices-list'].children.find(b => b.textContent.includes('motel'));
-assert(motelBtn && motelBtn.disabled, 'motel choice disabled when broke');
+const rentBtn = els['choices-list'].children.find(b => b.textContent.includes('Rent a room'));
+assert(rentBtn && rentBtn.disabled, 'rent-a-room choice disabled when broke');
+
+// --- Room tiers: price buys quality ---
+state.flags = {}; topUp(); state.cash = 30; state.timeHour = 20;
+loadScenario('rent_room');
+clickChoice('flophouse');
+assert(Math.abs(state.cash - 12) < 0.01, 'flophouse cost $18 (cash now $' + state.cash.toFixed(2) + ')');
+assert(state.hygiene === 70 && state.mental === 80, 'flophouse gives a rougher night than the motel');
+assert(state.timeHour === 8, 'flophouse still sleeps through to morning');
+
+topUp(); state.cash = 100; state.foodStash = 0; state.timeHour = 20;
+loadScenario('rent_room');
+clickChoice('Grandview');
+assert(Math.abs(state.cash - 15) < 0.01, 'hotel cost $85 (cash now $' + state.cash.toFixed(2) + ')');
+assert(state.foodStash === 1, 'hotel breakfast packed a meal to go');
+assert(state.hygiene === 100 && state.mental === 100, 'hotel fully restored');
+
+// --- Storage: plastic bag holds 1 meal, heavy-duty pack holds 4 ---
+state.flags = { backpackBroken: true }; topUp(); state.cash = 20; state.foodStash = 0;
+loadScenario('find_meal');
+clickChoice('to-go');
+assert(state.foodStash === 1, 'bought a packed meal');
+loadScenario('find_meal');
+const togoBtn = els['choices-list'].children.find(b => b.textContent.includes('to-go'));
+assert(togoBtn && togoBtn.disabled && togoBtn.textContent.includes('No room'), 'plastic grocery bag holds only one meal');
+state.flags = { hasSturdyBackpack: true };
+loadScenario('find_meal');
+const togoBtn2 = els['choices-list'].children.find(b => b.textContent.includes('to-go'));
+assert(togoBtn2 && !togoBtn2.disabled, 'heavy-duty pack has room for more');
+state.hunger = 40;
+loadScenario('find_meal');
+clickChoice('Eat a packed meal');
+assert(state.foodStash === 0 && state.hunger > 60, 'ate from the stash (hunger now ' + Math.floor(state.hunger) + ')');
+
+// --- Boots make the labor office a guaranteed daily stop ---
+state.flags = { hasWorkBoots: true, hasNewShoes: true }; topUp(); state.cash = 0;
+state.timeHour = 7;
+loadScenario();
+assert(els['narrative-text'].innerHTML.includes('day labor office'), 'morning forces the labor office when you own boots');
+assert(state.flags.lastLaborDay === state.day, 'labor office visit recorded for today');
+let repeatOffice = false;
+for (let i = 0; i < 30; i++) {
+    topUp(); state.timeHour = 7;
+    loadScenario();
+    if (els['narrative-text'].innerHTML.includes('day labor office')) repeatOffice = true;
+}
+assert(!repeatOffice, 'labor office does not reappear the same day');
+state.day++;
+topUp(); state.timeHour = 7;
+loadScenario();
+assert(els['narrative-text'].innerHTML.includes('day labor office'), 'labor office returns the next day');
+
+// --- Gear panel reflects inventory ---
+state.flags = { hasWorkBoots: true };
+renderStats();
+assert(els['gear-list'].innerHTML.includes('Steel-toe work boots'), 'gear panel lists boots');
+assert(els['gear-list'].innerHTML.includes('Worn backpack'), 'gear panel shows backpack tier');
+state.hasID = true;
+renderStats();
+assert(els['gear-list'].innerHTML.includes('State ID'), 'gear panel lists state ID');
+state.hasID = false;
 
 // --- Requirements: health and flag gating enforced on choices ---
 state.mode = 'goal'; state.flags = {};
