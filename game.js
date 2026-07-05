@@ -5,6 +5,7 @@ let state = {
     mental: 100,
     warmth: 100,
     hunger: 100,
+    hygiene: 100,
     cash: 0.00,
     timeHour: 8, // Starts at 8:00 AM
     day: 1,
@@ -89,6 +90,7 @@ function resolveTheft(confront) {
     state.hunger = 100;
     state.mental = Math.max(0, 100 - mentalPenalty);
     state.warmth = state.maxWarmthCapacity;
+    state.hygiene = 100;
     
     renderStats();
     
@@ -112,6 +114,7 @@ function resolveShelter() {
     state.hunger = 100;
     state.mental = 100;
     state.warmth = state.maxWarmthCapacity;
+    state.hygiene = 100;
 
     let referralMsg = "";
     if (!state.flags.hasShelterReferral) {
@@ -143,6 +146,7 @@ function resolveMotel() {
     state.hunger = 100;
     state.mental = 100;
     state.warmth = state.maxWarmthCapacity;
+    state.hygiene = 100;
 
     renderStats();
 
@@ -395,16 +399,17 @@ const scenarios = [
     {
         id: 'gym_trial',
         notRandom: false,
-        text: "You haven't showered in over a week. You stand outside a 24-hour fitness center.",
+        condition: () => state.hygiene <= 40,
+        text: "You can smell yourself, and so can everyone else. You stand outside a 24-hour fitness center, thinking about the showers inside.",
         effects: { timePassed: 0.1 },
         choices: [
-            { text: "Pay $5 for a guest day pass.", requires: { cash: 5.00 }, effects: { cash: -5.00, health: 15, mentalFortitude: 30, warmth: 20, timePassed: 1 }, nextScenario: 'gym_shower' },
+            { text: "Pay $5 for a guest day pass.", requires: { cash: 5.00 }, effects: { cash: -5.00, health: 15, mentalFortitude: 30, warmth: 20, hygiene: 100, timePassed: 1 }, nextScenario: 'gym_shower' },
             { text: "Try to slip in behind someone.", customAction: () => {
                 // Reduced failure rate to 20%
                 if (Math.random() < 0.2) {
                     loadScenario('gym_caught');
                 } else {
-                    applyEffects({ health: 15, mentalFortitude: 30, warmth: 20, timePassed: 1 });
+                    applyEffects({ health: 15, mentalFortitude: 30, warmth: 20, hygiene: 100, timePassed: 1 });
                     loadScenario('gym_shower');
                 }
             }},
@@ -673,8 +678,8 @@ const scenarios = [
         text: "A church basement runs a clothing closet today — a line of folding tables stacked with donated clothes. There's a wait, but it's free. Two blocks over, a thrift store sells clean, interview-ready outfits for cash.",
         effects: { timePassed: 0.1 },
         choices: [
-            { text: "Wait in line at the clothing closet.", effects: { warmth: -15, hunger: -10, mentalFortitude: 10, timePassed: 2, hasCleanClothes: true }, nextScenario: 'clothes_found' },
-            { text: "Buy an outfit at the thrift store ($15.00).", requires: { cash: 15.00 }, effects: { cash: -15.00, mentalFortitude: 15, timePassed: 1, hasCleanClothes: true }, nextScenario: 'clothes_found' },
+            { text: "Wait in line at the clothing closet.", effects: { warmth: -15, hunger: -10, mentalFortitude: 10, hygiene: 20, timePassed: 2, hasCleanClothes: true }, nextScenario: 'clothes_found' },
+            { text: "Buy an outfit at the thrift store ($15.00).", requires: { cash: 15.00 }, effects: { cash: -15.00, mentalFortitude: 15, hygiene: 20, timePassed: 1, hasCleanClothes: true }, nextScenario: 'clothes_found' },
             { text: "Not today.", nextScenario: null }
         ]
     },
@@ -819,6 +824,7 @@ function applyEffects(effects) {
     if (effects.mentalFortitude !== undefined) state.mental += effects.mentalFortitude;
     if (effects.warmth !== undefined) state.warmth += effects.warmth;
     if (effects.hunger !== undefined) state.hunger += effects.hunger;
+    if (effects.hygiene !== undefined) state.hygiene += effects.hygiene;
     if (effects.cash !== undefined) state.cash += effects.cash;
     if (effects.hasID !== undefined) state.hasID = effects.hasID;
     if (effects.hasCleanClothes !== undefined) state.hasCleanClothes = effects.hasCleanClothes;
@@ -838,7 +844,13 @@ function applyEffects(effects) {
         
         state.warmth -= warmupDrain * timePassed;
         state.hunger -= hungerDrain * timePassed;
-        
+        state.hygiene -= 1.5 * timePassed;
+
+        // Being visibly unwashed wears on you
+        if (state.hygiene < 25) {
+            state.mental -= 1 * timePassed;
+        }
+
         state.timeHour += timePassed;
         while (state.timeHour >= 24) {
             state.timeHour -= 24;
@@ -850,6 +862,7 @@ function applyEffects(effects) {
     state.mental = Math.max(0, Math.min(100, state.mental));
     state.warmth = Math.max(0, Math.min(state.maxWarmthCapacity, state.warmth));
     state.hunger = Math.max(0, Math.min(100, state.hunger));
+    state.hygiene = Math.max(0, Math.min(100, state.hygiene));
     state.cash = Math.max(0, state.cash);
 }
 
@@ -967,6 +980,7 @@ function renderStats() {
     updateElement('stat-mental', `${Math.floor(state.mental)}%`, state.mental <= 30);
     updateElement('stat-warmth', `${Math.floor(state.warmth)}%`, state.warmth <= 30);
     updateElement('stat-hunger', `${Math.floor(state.hunger)}%`, state.hunger <= 30);
+    updateElement('stat-hygiene', `${Math.floor(state.hygiene)}%`, state.hygiene <= 30);
     
     document.getElementById('stat-cash').textContent = `$${state.cash.toFixed(2)}`;
     document.getElementById('stat-time').textContent = formatTime(state.timeHour);

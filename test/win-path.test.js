@@ -35,6 +35,7 @@ function assert(cond, msg) {
 
 function topUp() {
     state.health = 100; state.mental = 100; state.warmth = 100; state.hunger = 100;
+    state.hygiene = 100;
     state.timeHour = 10;
 }
 
@@ -107,7 +108,7 @@ const dayBefore = state.day;
 clickChoice('motel');
 assert(Math.abs(state.cash - 55) < 0.01, 'motel cost $45 (cash now $' + state.cash.toFixed(2) + ')');
 assert(state.day === dayBefore + 1 && state.timeHour === 8, 'woke at 8 AM the next day');
-assert(state.health === 100 && state.hunger === 100 && state.mental === 100, 'motel fully restored stats');
+assert(state.health === 100 && state.hunger === 100 && state.mental === 100 && state.hygiene === 100, 'motel fully restored stats including hygiene');
 
 // --- Motel option disabled without cash ---
 topUp(); state.cash = 10;
@@ -153,6 +154,30 @@ topUp(); state.health = 50;
 loadScenario('clinic_desk');
 clickChoice('referral slip');
 assert(state.health > 80, 'clinic treated you via the referral (health now ' + Math.floor(state.health) + ')');
+
+// --- Hygiene: decays over time, gates the gym, restored by showers ---
+state.flags = {}; topUp();
+loadScenario('find_meal');
+clickChoice('Beg outside');
+assert(state.hygiene < 100, 'hygiene decays as time passes (now ' + state.hygiene.toFixed(1) + ')');
+
+let gymWhileClean = false;
+for (let i = 0; i < 300; i++) {
+    topUp(); // hygiene 100
+    loadScenario();
+    if (els['narrative-text'].innerHTML.includes('fitness center')) gymWhileClean = true;
+}
+assert(!gymWhileClean, 'gym shower scenario never appears while clean');
+
+topUp(); state.hygiene = 30; state.cash = 10;
+loadScenario('gym_trial');
+clickChoice('guest day pass');
+assert(state.hygiene > 90, 'gym shower restored hygiene (now ' + Math.floor(state.hygiene) + ')');
+
+topUp(); state.hygiene = 20; state.cash = 0; state.timeHour = 20;
+loadScenario('find_shelter');
+clickChoice('downtown shelter');
+assert(state.hygiene === 100, 'shelter stay restored hygiene');
 
 // --- Random pool sanity: conditions gate quest steps correctly ---
 // Fresh-ish state: reset relevant fields
