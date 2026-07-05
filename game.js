@@ -123,6 +123,31 @@ function resolveShelter() {
     `;
 }
 
+function resolveMotel() {
+    state.cash = Math.max(0, state.cash - 45);
+
+    if (state.timeHour < 8) {
+        state.timeHour = 8;
+    } else {
+        advanceDay();
+        state.timeHour = 8;
+    }
+
+    state.health = 100;
+    state.hunger = 100;
+    state.mental = 100;
+    state.warmth = state.maxWarmthCapacity;
+
+    renderStats();
+
+    document.getElementById('narrative-text').innerHTML = `<p>A hot shower, a real mattress, a door that locks. You raid the vending machine, sleep nine unbroken hours, and wake up feeling almost like your old self.</p>`;
+
+    const choicesContainer = document.getElementById('choices-list');
+    choicesContainer.innerHTML = `
+        <button class="choice-btn" onclick="loadScenario()">Check out and step outside</button>
+    `;
+}
+
 const scenarios = [
     // Original Scenarios Converted
     {
@@ -136,18 +161,19 @@ const scenarios = [
             { text: "Search the dumpster behind the grocery store.", effects: { health: -5, mentalFortitude: -5, warmth: -10, hunger: 30, cash: 0 } },
             { text: "Visit the busy intersection to panhandle.", effects: { health: -2, mentalFortitude: -5, warmth: -15, hunger: -10, cash: 5.00 } },
             { text: "Buy hot soup from a local deli ($3.00)", requires: { cash: 3.00 }, effects: { cash: -3.00, health: 5, mentalFortitude: 15, warmth: 35, hunger: 40 } },
-            { text: "Get a cup of hot coffee ($1.00)", requires: { cash: 1.00 }, effects: { cash: -1.00, health: 2, mentalFortitude: 15, warmth: 20, hunger: 5 } }
+            { text: "Get a cup of hot coffee ($1.00)", requires: { cash: 1.00 }, effects: { cash: -1.00, health: 2, mentalFortitude: 15, warmth: 20, hunger: 5 } },
+            { text: "Sit down for a full hot meal at the diner ($8.00)", requires: { cash: 8.00 }, effects: { cash: -8.00, health: 10, mentalFortitude: 20, warmth: 30, hunger: 70 } }
         ]
     },
     {
         id: 'find_shelter',
         notRandom: false,
         condition: () => state.timeHour >= 17 || state.timeHour <= 5,
-        text: "The wind is picking up, and dark clouds are rolling in. It looks like rain, maybe even sleet. You need to find a place to stay dry.",
+        text: "The light is fading and the temperature is dropping fast. You need to figure out where you're spending the night.",
         choices: [
             { text: "Head to the underpass.", effects: { health: 0, mentalFortitude: -2, warmth: 10, hunger: -10 } },
-            { 
-                text: "Try to get a bed at the downtown shelter.", 
+            {
+                text: "Try to get a bed at the downtown shelter.",
                 customAction: () => {
                     if (Math.random() < 0.03 && state.cash > 0) {
                         loadScenario('shelter_robbery');
@@ -156,7 +182,8 @@ const scenarios = [
                     }
                 }
             },
-            { text: "Hunker down in an abandoned building.", effects: { health: -5, mentalFortitude: -5, warmth: 15, hunger: -10 } }
+            { text: "Hunker down in an abandoned building.", effects: { health: -5, mentalFortitude: -5, warmth: 15, hunger: -10 } },
+            { text: "Get a motel room for the night ($45.00).", requires: { cash: 45.00 }, customAction: () => resolveMotel() }
         ]
     },
     {
@@ -235,6 +262,7 @@ const scenarios = [
                     choicesContainer.innerHTML = `<button class="choice-btn" onclick="loadScenario()">Keep going</button>`;
                 } 
             },
+            { text: "Buy your own burrito from the truck ($7.00).", requires: { cash: 7.00 }, effects: { cash: -7.00, hunger: 50, warmth: 10, mentalFortitude: 10 }, nextScenario: null },
             { text: "Keep walking. Your dignity—and your stomach—can't take it right now.", nextScenario: "street_hungry", effects: { hunger: -5, mentalFortitude: 5 } }
         ]
     },
@@ -757,6 +785,12 @@ function loadScenario(id) {
         return; 
     }
     
+    // Nightfall: force the shelter decision once per evening
+    if (!id && state.timeHour >= 19 && state.flags.lastShelterPromptDay !== state.day) {
+        state.flags.lastShelterPromptDay = state.day;
+        id = 'find_shelter';
+    }
+
     let scenario;
     if (id) {
         scenario = scenarios.find(s => s.id === id);

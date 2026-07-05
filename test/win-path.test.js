@@ -87,6 +87,34 @@ assert(checkGameStatus().startsWith('VICTORY'), 'checkGameStatus reports VICTORY
 renderStats();
 assert(els['narrative-text'].innerHTML.includes('VICTORY'), 'victory screen rendered');
 
+// --- Money makes food easier: diner meal in find_meal ---
+state.mode = 'goal'; state.flags = {};
+topUp(); state.cash = 20; state.hunger = 30;
+loadScenario('find_meal');
+clickChoice('diner');
+assert(Math.abs(state.cash - 12) < 0.01, 'diner meal cost $8 (cash now $' + state.cash.toFixed(2) + ')');
+assert(state.hunger > 60, 'diner meal restored hunger (now ' + Math.floor(state.hunger) + ')');
+
+// --- Nightfall forces the shelter decision once per evening ---
+topUp(); state.cash = 100; state.flags = {};
+state.timeHour = 19.5;
+loadScenario();
+assert(els['narrative-text'].innerHTML.includes("where you're spending the night"), 'find_shelter forced after 7 PM');
+assert(state.flags.lastShelterPromptDay === state.day, 'shelter prompt recorded for today');
+
+// --- Motel room: costs $45, safe night, wakes at 8 AM next day ---
+const dayBefore = state.day;
+clickChoice('motel');
+assert(Math.abs(state.cash - 55) < 0.01, 'motel cost $45 (cash now $' + state.cash.toFixed(2) + ')');
+assert(state.day === dayBefore + 1 && state.timeHour === 8, 'woke at 8 AM the next day');
+assert(state.health === 100 && state.hunger === 100 && state.mental === 100, 'motel fully restored stats');
+
+// --- Motel option disabled without cash ---
+topUp(); state.cash = 10;
+loadScenario('find_shelter');
+const motelBtn = els['choices-list'].children.find(b => b.textContent.includes('motel'));
+assert(motelBtn && motelBtn.disabled, 'motel choice disabled when broke');
+
 // --- Random pool sanity: conditions gate quest steps correctly ---
 // Fresh-ish state: reset relevant fields
 state.mode = 'goal'; state.hasID = false; state.hasCleanClothes = false; state.flags = {};
