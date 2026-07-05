@@ -325,6 +325,7 @@ const scenarios = [
     {
         id: 'medical_clinic',
         notRandom: false,
+        condition: () => state.timeHour >= 8 && state.timeHour <= 17,
         text: "You pass a free health clinic. You have a nagging cough that hasn't gone away for weeks.",
         effects: { timePassed: 0.1 },
         choices: [
@@ -443,6 +444,7 @@ const scenarios = [
     {
         id: 'police_move_on',
         notRandom: false,
+        condition: () => state.timeHour >= 21 || state.timeHour <= 5,
         text: "You find a relatively safe, dry spot in a public park to rest your eyes. Just as you drift off, a flashlight shines in your face. 'You can't sleep here. Move along.'",
         effects: { timePassed: 1 },
         choices: [
@@ -516,6 +518,7 @@ const scenarios = [
     {
         id: 'job_day_labor',
         notRandom: false,
+        condition: () => state.timeHour >= 6 && state.timeHour <= 14,
         text: "A contractor in a pickup truck pulls over. 'Need someone to help haul drywall for 4 hours. $10 an hour.'",
         effects: { timePassed: 0.1 },
         choices: [

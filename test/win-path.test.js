@@ -91,11 +91,14 @@ assert(els['narrative-text'].innerHTML.includes('VICTORY'), 'victory screen rend
 // Fresh-ish state: reset relevant fields
 state.mode = 'goal'; state.hasID = false; state.hasCleanClothes = false; state.flags = {};
 topUp(); state.cash = 50;
+let nightSceneByDay = false;
 for (let i = 0; i < 200; i++) {
-    topUp(); // keep alive; loadScenario entry effects drain stats
+    topUp(); // keep alive; loadScenario entry effects drain stats; resets to 10:00 AM
     loadScenario();
+    if (els['narrative-text'].innerHTML.includes('a flashlight shines in your face')) nightSceneByDay = true;
 }
 assert(true, '200 random goal-mode scenario loads without crash');
+assert(!nightSceneByDay, 'police_move_on (night scene) never appears during the day');
 
 // order_birth_cert must never appear randomly without a mailing address
 state.flags = {}; topUp();
