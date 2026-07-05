@@ -179,6 +179,45 @@ loadScenario('find_shelter');
 clickChoice('downtown shelter');
 assert(state.hygiene === 100, 'shelter stay restored hygiene');
 
+// --- Backpack: breaking once stops repeats until replaced ---
+state.flags = {}; topUp();
+loadScenario('backpack_breaks');
+assert(state.flags.backpackBroken === true, 'backpack break sets the broken flag');
+let rebreak = false;
+for (let i = 0; i < 300; i++) {
+    topUp();
+    loadScenario();
+    if (els['narrative-text'].innerHTML.includes('backpack snaps')) rebreak = true;
+}
+assert(!rebreak, 'backpack_breaks never repeats while already broken');
+
+// --- Scavenging can turn up a replacement when yours is broken ---
+topUp(); state.cash = 0;
+const realRandom = Math.random;
+Math.random = () => 0.1; // force the 35% find
+loadScenario('find_meal');
+clickChoice('dumpster');
+Math.random = realRandom;
+assert(els['narrative-text'].innerHTML.includes('faded canvas backpack'), 'dumpster dive found a backpack');
+clickChoice('Take it');
+assert(state.flags.backpackBroken === false, 'found backpack clears the broken flag');
+
+// --- Surplus store: used pack gated to broken, new pack ends breaks forever ---
+state.flags = {}; topUp(); state.cash = 100;
+loadScenario('surplus_store');
+const usedBtn = els['choices-list'].children.find(b => b.textContent.includes('used backpack'));
+assert(usedBtn && usedBtn.disabled && usedBtn.textContent.includes('holding together'), 'used backpack disabled while current pack works');
+clickChoice('heavy-duty');
+assert(state.flags.hasSturdyBackpack === true, 'new backpack sets sturdy flag');
+assert(Math.abs(state.cash - 70) < 0.01, 'new backpack cost $30 (cash now $' + state.cash.toFixed(2) + ')');
+let sturdyBreak = false;
+for (let i = 0; i < 300; i++) {
+    topUp();
+    loadScenario();
+    if (els['narrative-text'].innerHTML.includes('backpack snaps')) sturdyBreak = true;
+}
+assert(!sturdyBreak, 'backpack never breaks once you own the heavy-duty pack');
+
 // --- Random pool sanity: conditions gate quest steps correctly ---
 // Fresh-ish state: reset relevant fields
 state.mode = 'goal'; state.hasID = false; state.hasCleanClothes = false; state.flags = {};

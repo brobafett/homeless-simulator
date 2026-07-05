@@ -168,7 +168,14 @@ const scenarios = [
             "You are feeling peckish. It might be a good idea to secure a meal while you have the chance. What do you do?",
         choices: [
             { text: "Beg outside the local bakery.", effects: { health: -2, mentalFortitude: -2, warmth: -10, hunger: 10, cash: 2.50 } },
-            { text: "Search the dumpster behind the grocery store.", effects: { health: -5, mentalFortitude: -5, warmth: -10, hunger: 30, cash: 0 } },
+            { text: "Search the dumpster behind the grocery store.", customAction: () => {
+                applyEffects({ health: -5, mentalFortitude: -5, warmth: -10, hunger: 30 });
+                if (state.flags.backpackBroken && Math.random() < 0.35) {
+                    loadScenario('dumpster_backpack');
+                } else {
+                    loadScenario();
+                }
+            }},
             { text: "Visit the busy intersection to panhandle.", effects: { health: -2, mentalFortitude: -5, warmth: -15, hunger: -10, cash: 5.00 } },
             { text: "Buy hot soup from a local deli ($3.00)", requires: { cash: 3.00 }, effects: { cash: -3.00, health: 5, mentalFortitude: 15, warmth: 35, hunger: 40 } },
             { text: "Get a cup of hot coffee ($1.00)", requires: { cash: 1.00 }, effects: { cash: -1.00, health: 2, mentalFortitude: 15, warmth: 20, hunger: 5 } },
@@ -211,7 +218,14 @@ const scenarios = [
         text: "The streets are relatively quiet. A rare moment of stillness, but the constant pressure of survival never really leaves you.",
         choices: [
             { text: "Rest on a park bench.", effects: { health: 5, mentalFortitude: 15, warmth: -15, hunger: -10 } },
-            { text: "Wander and collect cans for recycling.", effects: { health: -5, mentalFortitude: 5, warmth: -10, hunger: -15, cash: 3.50 } },
+            { text: "Wander and collect cans for recycling.", customAction: () => {
+                applyEffects({ health: -5, mentalFortitude: 5, warmth: -10, hunger: -15, cash: 3.50 });
+                if (state.flags.backpackBroken && Math.random() < 0.35) {
+                    loadScenario('dumpster_backpack');
+                } else {
+                    loadScenario();
+                }
+            }},
             { text: "Read a discarded newspaper to stay sharp.", effects: { health: 0, mentalFortitude: 20, warmth: -10, hunger: -10 } },
             { text: "Warm up with a cup of hot soup ($3.00)", requires: { cash: 3.00 }, effects: { cash: -3.00, health: 5, mentalFortitude: 15, warmth: 35, hunger: 30 } },
             { text: "Get a cup of hot coffee ($1.00)", requires: { cash: 1.00 }, effects: { cash: -1.00, health: 2, mentalFortitude: 15, warmth: 20, hunger: 5 } }
@@ -243,8 +257,9 @@ const scenarios = [
     {
         id: "backpack_breaks",
         notRandom: false,
+        condition: () => !state.flags.backpackBroken && !state.flags.hasSturdyBackpack,
         text: "As you hurry across the intersection, the left strap of your overstuffed backpack snaps. Your sleeping bag, a change of clothes, and your plastic folder of vital documents spill onto the wet pavement. You can't carry it all loose.",
-        effects: { mentalFortitude: -15, timePassed: 0.5 },
+        effects: { mentalFortitude: -15, timePassed: 0.5, flags: { backpackBroken: true } },
         choices: [
             { text: "Abandon the heavy sleeping bag. Keep the documents and extra clothes.", nextScenario: "street_lightweight", effects: { maxWarmthCapacity: -20 } },
             { text: "Use a discarded plastic grocery bag to bundle the loose items. It will drastically slow your walking speed.", nextScenario: "street_with_plastic_bag", effects: { timeModifier: 1.5 } }
@@ -735,6 +750,66 @@ const scenarios = [
         notRandom: true,
         text: "The boots are heavy, warm, and tough as nails. With these, the dispatcher at the day labor office will let you take the construction tickets — the ones that actually pay.",
         choices: [ { text: "Break them in.", nextScenario: null } ]
+    },
+    {
+        id: 'dumpster_backpack',
+        notRandom: true,
+        text: "Wedged behind a flattened cardboard box, you spot a faded canvas backpack. One zipper pull is missing, but the straps are solid — a mile better than what you've been hauling your life around in.",
+        choices: [
+            {
+                text: "Take it and transfer your things.",
+                customAction: () => {
+                    state.flags.backpackBroken = false;
+                    state.timeModifier = 1.0;
+                    applyEffects({ mentalFortitude: 10, timePassed: 0.3 });
+                    loadScenario();
+                }
+            }
+        ]
+    },
+    {
+        id: 'surplus_store',
+        notRandom: false,
+        weight: 2,
+        condition: () => !state.flags.hasSturdyBackpack && state.timeHour >= 9 && state.timeHour <= 18,
+        text: "An army surplus store has bins of used gear on the sidewalk — faded rucksacks, canteens, wool socks. Behind the counter hang the new heavy-duty packs: double-stitched straps, the kind that never let go.",
+        effects: { timePassed: 0.1 },
+        choices: [
+            {
+                text: "Buy a used backpack from the bin ($8.00).",
+                requires: { cash: 8.00, flag: 'backpackBroken', flagLabel: "(Your current pack is holding together)" },
+                customAction: () => {
+                    state.flags.backpackBroken = false;
+                    state.timeModifier = 1.0;
+                    applyEffects({ cash: -8.00, mentalFortitude: 10, timePassed: 0.5 });
+                    loadScenario('backpack_used_bought');
+                }
+            },
+            {
+                text: "Buy a new heavy-duty backpack ($30.00).",
+                requires: { cash: 30.00 },
+                customAction: () => {
+                    state.flags.backpackBroken = false;
+                    state.flags.hasSturdyBackpack = true;
+                    state.timeModifier = 1.0;
+                    applyEffects({ cash: -30.00, mentalFortitude: 15, timePassed: 0.5 });
+                    loadScenario('backpack_new_bought');
+                }
+            },
+            { text: "Browse and move on.", nextScenario: null }
+        ]
+    },
+    {
+        id: 'backpack_used_bought',
+        notRandom: true,
+        text: "The used rucksack smells like mothballs, but everything fits and both straps hold. You repack your life in the store's doorway and walk out standing straighter.",
+        choices: [ { text: "Move out.", nextScenario: null } ]
+    },
+    {
+        id: 'backpack_new_bought',
+        notRandom: true,
+        text: "Stiff zippers, padded straps, reinforced seams. It's the first new thing you've owned in a long time, and it will not let you down. Your gear rides comfortably on your back.",
+        choices: [ { text: "Shoulder it and go.", nextScenario: null } ]
     },
     {
         id: 'labor_office',
