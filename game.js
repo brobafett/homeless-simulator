@@ -101,7 +101,8 @@ function resolveTheft(confront) {
     state.hygiene = 100;
     
     renderStats();
-    
+    if (checkGameStatus() !== "CONTINUE") return;
+
     document.getElementById('narrative-text').innerHTML = `<p>Morning comes.${customMsg}</p>`;
     
     const choicesContainer = document.getElementById('choices-list');
@@ -131,6 +132,7 @@ function resolveShelter() {
     }
 
     renderStats();
+    if (checkGameStatus() !== "CONTINUE") return;
 
     document.getElementById('narrative-text').innerHTML = `<p>You got a warm bed for the night. You wake up feeling fully rested and ready to face a new day.${referralMsg}</p>`;
     
@@ -174,6 +176,7 @@ function resolveRoom(tier) {
     if (room.breakfast) state.foodStash = Math.min(carryCapacity(), state.foodStash + 1);
 
     renderStats();
+    if (checkGameStatus() !== "CONTINUE") return;
 
     document.getElementById('narrative-text').innerHTML = `<p>${room.msg}</p>`;
 
@@ -998,10 +1001,10 @@ function makeChoice(choice) {
 }
 
 function loadScenario(id) {
-    // Check if dead before loading new scenario
-    if (state.health <= 0 || state.hunger <= 0 || (state.warmth <= 0 && state.health < 50) || state.mental <= 0) {
-        renderStats(); 
-        return; 
+    // Stop if the game has already ended (death or victory) — renderStats shows the end screen
+    if (checkGameStatus() !== "CONTINUE") {
+        renderStats();
+        return;
     }
     
     // Nightfall: force the shelter decision once per evening
@@ -1037,10 +1040,10 @@ function loadScenario(id) {
 
     if (scenario.effects) {
         applyEffects(scenario.effects);
-        // Check if dead due to entry effects of the new scenario
-        if (state.health <= 0 || state.hunger <= 0 || (state.warmth <= 0 && state.health < 50) || state.mental <= 0) {
-            renderStats(); 
-            return; 
+        // Entry effects may have ended the game
+        if (checkGameStatus() !== "CONTINUE") {
+            renderStats();
+            return;
         }
     }
     

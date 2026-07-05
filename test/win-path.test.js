@@ -88,6 +88,12 @@ assert(checkGameStatus().startsWith('VICTORY'), 'checkGameStatus reports VICTORY
 renderStats();
 assert(els['narrative-text'].innerHTML.includes('VICTORY'), 'victory screen rendered');
 
+// Regression: victory must survive the real gameplay path — loadScenario used to
+// render the victory screen and then immediately overwrite it with a new scenario
+loadScenario();
+assert(els['narrative-text'].innerHTML.includes('VICTORY'), 'victory screen not clobbered by the next scenario load');
+assert(els['choices-list'].innerHTML.includes('Play Again'), 'victory screen offers Play Again');
+
 // --- Money makes food easier: diner meal in find_meal ---
 state.mode = 'goal'; state.flags = {};
 topUp(); state.cash = 20; state.hunger = 30;
