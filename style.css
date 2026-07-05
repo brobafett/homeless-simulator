@@ -227,6 +227,42 @@ body {
     max-width: 800px;
 }
 
+#continue-area {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    margin-bottom: 2.5rem;
+    width: 100%;
+    max-width: 500px;
+}
+
+#continue-btn {
+    width: 100%;
+}
+
+.text-btn {
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    text-decoration: underline;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 0.85rem;
+    margin-top: 0.75rem;
+}
+
+.text-btn:hover {
+    color: var(--text-primary);
+}
+
+.storage-note {
+    margin-top: 3rem;
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    max-width: 520px;
+    line-height: 1.5;
+}
+
 .mode-btn {
     padding: 2rem;
     font-size: 1.25rem;

@@ -18,6 +18,49 @@ let state = {
     flags: {}
 };
 
+// --- Save system: progress lives only in this browser's localStorage.
+// No cookies, no server, no tracking — see the notice on the title screen.
+const SAVE_KEY = 'the-streets-save';
+
+function saveGame() {
+    try { localStorage.setItem(SAVE_KEY, JSON.stringify(state)); } catch (e) { /* storage unavailable */ }
+}
+
+function loadSave() {
+    try {
+        const raw = localStorage.getItem(SAVE_KEY);
+        return raw ? JSON.parse(raw) : null;
+    } catch (e) { return null; }
+}
+
+function clearSave() {
+    try { localStorage.removeItem(SAVE_KEY); } catch (e) { /* storage unavailable */ }
+}
+
+function deleteSave() {
+    clearSave();
+    document.getElementById('continue-area').style.display = 'none';
+}
+
+function continueGame() {
+    const saved = loadSave();
+    if (!saved || !saved.mode) return;
+
+    Object.assign(state, saved); // merge over defaults so old saves survive new fields
+
+    document.getElementById('title-screen').style.display = 'none';
+    document.getElementById('game-screen').style.display = 'flex';
+
+    if (state.mode === 'goal') {
+        document.getElementById('housing-checklist').style.display = 'block';
+    } else if (state.mode === 'endless') {
+        document.getElementById('endless-counter').style.display = 'block';
+    }
+
+    renderStats();
+    loadScenario();
+}
+
 // How many packed meals your current bag can hold
 function carryCapacity() {
     if (state.flags.hasSturdyBackpack) return 4;
@@ -1155,6 +1198,8 @@ function renderStats() {
 
     renderGear();
 
+    if (state.mode) saveGame();
+
     checkGameOver();
 }
 
@@ -1164,6 +1209,7 @@ function checkGameOver() {
     if (status.startsWith("GAME OVER")) {
         endGame(status.replace("GAME OVER: ", ""));
     } else if (status.startsWith("VICTORY")) {
+        clearSave();
         document.getElementById('narrative-text').innerHTML = `<p style="color: #4bd863; font-weight: bold;">VICTORY</p><p>${status.replace("VICTORY: ", "")}</p>`;
         document.getElementById('choices-list').innerHTML = `
             <button class="choice-btn" onclick="location.reload()">Play Again</button>
@@ -1172,6 +1218,7 @@ function checkGameOver() {
 }
 
 function endGame(message) {
+    clearSave();
     document.getElementById('narrative-text').innerHTML = `<p style="color: var(--accent-color); font-weight: bold;">GAME OVER</p><p>${message}</p>`;
     document.getElementById('choices-list').innerHTML = `
         <button class="choice-btn" onclick="location.reload()">Try Again</button>
@@ -1179,3 +1226,14 @@ function endGame(message) {
 }
 
 // Initial game state is paused until startGame is called.
+
+// Title screen: offer to continue a saved run, if one exists
+(function initTitleScreen() {
+    const saved = loadSave();
+    if (saved && saved.mode) {
+        const modeName = saved.mode === 'goal' ? 'The Way Out' : 'Endure';
+        document.getElementById('continue-btn').innerHTML =
+            `<strong>Continue</strong><br><small>Day ${saved.day} — ${modeName} — $${Number(saved.cash).toFixed(2)}</small>`;
+        document.getElementById('continue-area').style.display = 'block';
+    }
+})();

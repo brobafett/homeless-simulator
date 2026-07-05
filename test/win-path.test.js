@@ -22,6 +22,12 @@ global.document = {
     createElement() { return makeEl('btn'); }
 };
 global.location = { reload() {} };
+const storage = {};
+global.localStorage = {
+    setItem(k, v) { storage[k] = String(v); },
+    getItem(k) { return k in storage ? storage[k] : null; },
+    removeItem(k) { delete storage[k]; }
+};
 
 eval(fs.readFileSync(path.join(__dirname, '..', 'game.js'), 'utf8')
     + '\n;global.G = { state };');
@@ -93,6 +99,7 @@ assert(els['narrative-text'].innerHTML.includes('VICTORY'), 'victory screen rend
 loadScenario();
 assert(els['narrative-text'].innerHTML.includes('VICTORY'), 'victory screen not clobbered by the next scenario load');
 assert(els['choices-list'].innerHTML.includes('Play Again'), 'victory screen offers Play Again');
+assert(loadSave() === null, 'victory wipes the save');
 
 // --- Money makes food easier: diner meal in find_meal ---
 state.mode = 'goal'; state.flags = {};
@@ -318,6 +325,23 @@ for (let i = 0; i < 300; i++) {
     if (html.includes('Hopewell') || html.includes('DMV') || html.includes('clothing closet')) questLeak = true;
 }
 assert(!questLeak, 'quest scenarios never appear in endless mode');
+
+// --- Save system: autosave, continue, and wipe on death ---
+state.mode = 'goal'; state.hasID = false; state.hasCleanClothes = false; state.flags = {};
+topUp(); state.cash = 77.50; state.day = 12;
+loadScenario('find_meal'); // renderStats autosaves
+let saved = loadSave();
+assert(saved && saved.mode === 'goal' && saved.day === 12 && Math.abs(saved.cash - 77.50) < 0.01, 'game autosaves on render');
+
+state.cash = 1.00; state.day = 1; state.flags = {};
+continueGame();
+assert(Math.abs(state.cash - 77.50) < 0.01 && state.day === 12, 'continueGame restores the saved run');
+
+state.health = 0;
+renderStats(); // death -> endGame -> save wiped
+assert(loadSave() === null, 'death wipes the save');
+assert(els['narrative-text'].innerHTML.includes('GAME OVER'), 'death screen shown');
+state.health = 100; // revive for cleanliness
 
 console.log(failures === 0 ? '\nALL TESTS PASSED' : '\n' + failures + ' FAILURES');
 process.exit(failures === 0 ? 0 : 1);

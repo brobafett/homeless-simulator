@@ -8,6 +8,8 @@ Built with plain HTML, CSS, and JavaScript. No frameworks, no build step, no dep
 
 **[Play it in your browser](https://brobafett.github.io/homeless-simulator/)** — or clone the repo and open `index.html`. That's it.
 
+Progress autosaves to your browser's local storage, on your device only — no cookies, no server, no accounts, no analytics, no tracking of any kind. Dying, winning, or starting a new game erases the save, and the title screen has a delete button if you want it gone sooner.
+
 ### Game modes
 
 - **The Way Out (Goal Mode)** — Break the cycle: save $1,200, obtain a state-issued ID, and secure clean clothes to qualify for an apartment lease. The catch: getting an ID requires a birth certificate, which requires a mailing address, which requires knowing where to ask.
