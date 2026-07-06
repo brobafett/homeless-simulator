@@ -15,7 +15,15 @@ let state = {
     difficultyMultiplier: 1.0,
     hasID: false,
     hasCleanClothes: false,
-    flags: {}
+    flags: {
+        hasPhone: false,
+        phoneExpiryDay: 0,
+        coffeeHoursRemaining: 0,
+        motelDaysRemaining: 0, // active prepaid motel nights; doubles as proof of residency
+        idOrdered: false,
+        idArrivesDay: 0,
+        returned_wallet: false
+    }
 };
 
 // --- Save system: progress lives only in this browser's localStorage.
@@ -61,6 +69,12 @@ function continueGame() {
     loadScenario();
 }
 
+// A prepaid phone only helps while there are minutes on it.
+// Old saves and test resets may lack the phone flags, so read them defensively.
+function phoneActive() {
+    return !!state.flags.hasPhone && state.day <= (state.flags.phoneExpiryDay || 0);
+}
+
 // How many packed meals your current bag can hold
 function carryCapacity() {
     if (state.flags.hasSturdyBackpack) return 4;
@@ -104,6 +118,7 @@ function checkGameStatus() {
 
 function advanceDay() {
     state.day++;
+    if ((state.flags.motelDaysRemaining || 0) > 0) state.flags.motelDaysRemaining--;
     if (state.mode === "endless") {
         state.difficultyMultiplier += 0.08; // Every day gets 8% harder
     }
@@ -187,22 +202,37 @@ function resolveShelter() {
 
 const ROOM_TIERS = {
     flophouse: {
-        cost: 18, health: 90, mental: 80, hunger: 85, hygiene: 70,
+        cost: 18, health: 90, mental: 80, hunger: 85, hygiene: 70, robberyChance: 0.2,
         msg: "A canvas cot in a room full of snoring strangers, a shared bathroom down the hall, and a mattress you try not to think about. You sleep with your shoes on and one eye open — but you sleep."
     },
     motel: {
-        cost: 45, health: 100, mental: 100, hunger: 100, hygiene: 100,
-        msg: "A hot shower, a real mattress, a door that locks. You raid the vending machine, sleep nine unbroken hours, and wake up feeling almost like your old self."
+        cost: 50, discountable: true, health: 100, mental: 100, hunger: 100, hygiene: 100,
+        msg: "A hot shower, a real mattress, a door that locks. You raid the vending machine, sleep nine unbroken hours, and wake up feeling almost like your old self.",
+        prepaidMsg: "Your key still works — of course it does; the room is paid for. A hot shower, a real mattress, a door nobody can move you along from. You sleep like a person with somewhere to be."
     },
-    hotel: {
-        cost: 85, health: 100, mental: 100, hunger: 100, hygiene: 100, breakfast: true,
-        msg: "Crisp sheets, a rainfall shower, towels that smell like nothing at all. In the morning you eat like a king at the breakfast buffet and quietly wrap extra food for the road."
+    motel_weekly: {
+        cost: 200, discountable: true, nights: 6, health: 100, mental: 100, hunger: 100, hygiene: 100,
+        msg: "You count the bills out and the clerk slides you a brass key — yours for six nights. A door that locks. A shower. An address. You lie in the dark listening to the heater tick and, for the first time in months, your mind goes quiet."
     }
 };
 
-function resolveRoom(tier) {
+// Returning the lost wallet earns a permanent 20% discount at the motel — the owner manages it
+function roomCost(tier) {
     const room = ROOM_TIERS[tier];
-    state.cash = Math.max(0, state.cash - room.cost);
+    if (room.discountable && state.flags.returned_wallet) return Math.round(room.cost * 0.8);
+    return room.cost;
+}
+
+function resolveRoom(tier, prepaid) {
+    const room = ROOM_TIERS[tier];
+    if (!prepaid) state.cash = Math.max(0, state.cash - roomCost(tier));
+    if (room.nights) state.flags.motelDaysRemaining = room.nights;
+
+    // Flophouse: open bunks and no locks — some nights the wrong person notices you
+    if (room.robberyChance && Math.random() < room.robberyChance && state.cash > 0) {
+        loadScenario('shelter_robbery');
+        return;
+    }
 
     if (state.timeHour < 8) {
         state.timeHour = 8;
@@ -216,16 +246,16 @@ function resolveRoom(tier) {
     state.mental = room.mental;
     state.warmth = state.maxWarmthCapacity;
     state.hygiene = room.hygiene;
-    if (room.breakfast) state.foodStash = Math.min(carryCapacity(), state.foodStash + 1);
 
     renderStats();
     if (checkGameStatus() !== "CONTINUE") return;
 
-    document.getElementById('narrative-text').innerHTML = `<p>${room.msg}</p>`;
+    const msg = (prepaid && room.prepaidMsg) ? room.prepaidMsg : room.msg;
+    document.getElementById('narrative-text').innerHTML = `<p>${msg}</p>`;
 
     const choicesContainer = document.getElementById('choices-list');
     choicesContainer.innerHTML = `
-        <button class="choice-btn" onclick="loadScenario()">Check out and step outside</button>
+        <button class="choice-btn" onclick="loadScenario()">${prepaid ? 'Lock the door behind you and head out' : 'Check out and step outside'}</button>
     `;
 }
 
@@ -273,17 +303,24 @@ const scenarios = [
                 }
             },
             { text: "Hunker down in an abandoned building.", effects: { health: -5, mentalFortitude: -5, warmth: 15, hunger: -10 } },
+            { text: "Head back to your motel room — it's paid through the week.", requires: { flag: 'motelDaysRemaining', flagLabel: '(No room paid up)' }, customAction: () => resolveRoom('motel', true) },
             { text: "Rent a room for the night (from $18.00).", requires: { cash: 18.00 }, nextScenario: 'rent_room' }
         ]
     },
     {
         id: 'rent_room',
         notRandom: true,
-        text: "A few blocks apart, three signs glow against the dark: THE ALCOVE — BEDS $18, a budget motel with a flickering VACANCY sign at $45, and the Grandview Hotel, warm light spilling from its lobby, $85 a night.",
+        text: () => {
+            let text = `Two signs glow against the dark a few blocks apart: THE ALCOVE — BEDS $18, and a budget motel with a flickering VACANCY sign at $${roomCost('motel')} a night. A hand-lettered card in the motel office window adds: WEEKLY RATE — 6 NIGHTS, $${roomCost('motel_weekly')} UP FRONT.`;
+            if (state.flags.returned_wallet) {
+                text += " The manager at the motel desk is the person whose wallet you returned. They quietly knock 20% off the motel's rates whenever they see you: 'Honest people stay cheaper here.'";
+            }
+            return text;
+        },
         choices: [
             { text: "A bunk at the Alcove flophouse ($18.00).", requires: { cash: 18.00 }, customAction: () => resolveRoom('flophouse') },
-            { text: "A room at the budget motel ($45.00).", requires: { cash: 45.00 }, customAction: () => resolveRoom('motel') },
-            { text: "A night at the Grandview Hotel ($85.00).", requires: { cash: 85.00 }, customAction: () => resolveRoom('hotel') },
+            { text: () => `A room at the budget motel ($${roomCost('motel').toFixed(2)}).`, requires: { cash: () => roomCost('motel') }, customAction: () => resolveRoom('motel') },
+            { text: () => `Six nights at the motel, paid up front ($${roomCost('motel_weekly').toFixed(2)}).`, requires: { cash: () => roomCost('motel_weekly') }, customAction: () => resolveRoom('motel_weekly') },
             { text: "Too rich for tonight. Reconsider your options.", customAction: () => loadScenario('find_shelter') }
         ]
     },
@@ -313,8 +350,60 @@ const scenarios = [
             { text: "Read a discarded newspaper to stay sharp.", effects: { health: 0, mentalFortitude: 20, warmth: -10, hunger: -10 } },
             { text: "Warm up with a cup of hot soup ($3.00)", requires: { cash: 3.00 }, effects: { cash: -3.00, health: 5, mentalFortitude: 15, warmth: 35, hunger: 30 } },
             { text: "Get a cup of hot coffee ($1.00)", requires: { cash: 1.00 }, effects: { cash: -1.00, health: 2, mentalFortitude: 15, warmth: 20, hunger: 5 } },
-            { text: "Eat a packed meal from your bag.", requires: { stash: 1 }, effects: { foodStash: -1, hunger: 35, mentalFortitude: 5, timePassed: 0.3 } }
+            { text: "Eat a packed meal from your bag.", requires: { stash: 1 }, effects: { foodStash: -1, hunger: 35, mentalFortitude: 5, timePassed: 0.3 } },
+            { text: "Stop by the convenience store on the corner.", effects: { timePassed: 0.2 }, nextScenario: 'convenience_store' }
         ]
+    },
+    {
+        id: 'convenience_store',
+        notRandom: true,
+        text: () => {
+            let phoneLine;
+            if (!state.flags.hasPhone) {
+                phoneLine = "Behind the register, a rack of prepaid burner phones hangs next to the cigarettes: $20 for a handset loaded with five days of minutes — enough for a dispatcher or a caseworker to actually reach you.";
+            } else if (phoneActive()) {
+                phoneLine = "Your prepaid phone still has minutes on it, but a $10 top-up card would buy another five days before it goes dark.";
+            } else {
+                phoneLine = "Your prepaid phone has been dead for days — no minutes, no callbacks. A $10 top-up card would put five days of service back on it.";
+            }
+            return "Fluorescent lights, burnt coffee, a clerk who watches you without quite staring. " + phoneLine;
+        },
+        effects: { warmth: 5, timePassed: 0.1 },
+        choices: [
+            {
+                text: "Buy a prepaid phone ($20.00).",
+                requires: { cash: 20.00, notFlag: 'hasPhone', notFlagLabel: '(You already own a phone)' },
+                customAction: () => {
+                    state.flags.hasPhone = true;
+                    state.flags.phoneExpiryDay = state.day + 5;
+                    applyEffects({ cash: -20.00, mentalFortitude: 10, timePassed: 0.3 });
+                    loadScenario('phone_bought');
+                }
+            },
+            {
+                text: "Top up your phone — 5 more days ($10.00).",
+                requires: { cash: 10.00, flag: 'hasPhone', flagLabel: "(You don't own a phone)" },
+                customAction: () => {
+                    // Extend from today if the minutes already ran out
+                    state.flags.phoneExpiryDay = Math.max(state.day, state.flags.phoneExpiryDay || 0) + 5;
+                    applyEffects({ cash: -10.00, timePassed: 0.2 });
+                    loadScenario('phone_topped_up');
+                }
+            },
+            { text: "Warm your hands a minute and leave.", nextScenario: null }
+        ]
+    },
+    {
+        id: 'phone_bought',
+        notRandom: true,
+        text: "The clerk snaps the phone out of its plastic shell and activates it at the counter. It's cheap, the screen is scratched, but it rings — and that changes everything. The day labor dispatcher can text you the morning ticket list now. No more two-hour walks just to read a board.",
+        choices: [ { text: "Pocket the phone and save the dispatcher's number.", nextScenario: null } ]
+    },
+    {
+        id: 'phone_topped_up',
+        notRandom: true,
+        text: "You scratch the foil off the top-up card and punch in the code. Five more days of minutes. Five more days of being reachable — which, out here, is five more days of being employable.",
+        choices: [ { text: "Step back outside.", nextScenario: null } ]
     },
     // New Advanced Scenarios
     {
@@ -628,24 +717,41 @@ const scenarios = [
     {
         id: 'lost_wallet',
         notRandom: false,
-        text: "While walking past a bus stop, you see a leather wallet on the ground. Inside, there is an ID, some credit cards, and $40 in cash.",
+        text: "While walking past a bus stop, you see a leather wallet on the ground. Inside, there is an ID, some credit cards, and a fold of cash — more than you've held in weeks.",
         effects: { timePassed: 0.1 },
         choices: [
-            { text: "Take the cash and drop the wallet in a mailbox.", effects: { cash: 40.00, mentalFortitude: -15 }, nextScenario: 'wallet_kept' },
-            { text: "Walk to the address on the ID to return it.", effects: { timePassed: 1 }, nextScenario: 'wallet_returned' }
+            {
+                text: "Take the cash and drop the wallet in a mailbox.",
+                requires: { mentalFortitude: 25 },
+                customAction: () => {
+                    const haul = Math.round((40 + Math.random() * 80) * 100) / 100; // $40–$120
+                    state.flags.walletCashFound = haul;
+                    applyEffects({ cash: haul, mentalFortitude: -30, timePassed: 0.2 });
+                    loadScenario('wallet_kept');
+                }
+            },
+            {
+                text: "Walk to the address on the ID to return it.",
+                customAction: () => {
+                    applyEffects({ cash: 20.00, mentalFortitude: 20, warmth: 100, timePassed: 1 });
+                    // Set the coffee buff after the walk so all 3 hours apply going forward
+                    state.flags.returned_wallet = true;
+                    state.flags.coffeeHoursRemaining = 3;
+                    loadScenario('wallet_returned');
+                }
+            }
         ]
     },
     {
         id: 'wallet_kept',
         notRandom: true,
-        text: "You pocket the $40. You needed it more than they did, you tell yourself. Still, a pang of guilt gnaws at you.",
+        text: () => `You pocket the $${(state.flags.walletCashFound || 0).toFixed(2)} and drop the wallet in a mailbox. You needed it more than they did, you tell yourself. It doesn't help. The face on the ID stays with you for hours.`,
         choices: [ { text: "Keep walking.", nextScenario: null } ]
     },
     {
         id: 'wallet_returned',
         notRandom: true,
-        text: "You knock on the door and return the wallet. The owner is shocked and overwhelmingly grateful. They insist on giving you a $20 reward and a warm cup of coffee.",
-        effects: { cash: 20.00, warmth: 15, mentalFortitude: 30 },
+        text: "You knock on the door and hold out the wallet, everything still inside. The owner is stunned, then overwhelmingly grateful — they press a $20 bill into your hand and insist you come in from the cold for a huge mug of fresh coffee. It warms you through. 'I manage the motel on 5th,' they say as you leave. 'You ever need a room, you ask for me.'",
         choices: [ { text: "Thank them and leave.", nextScenario: null } ]
     },
     {
@@ -758,18 +864,55 @@ const scenarios = [
         id: 'dmv_visit',
         notRandom: false,
         weight: 3,
-        condition: () => state.mode === 'goal' && state.flags.hasBirthCert && !state.hasID && state.timeHour >= 9 && state.timeHour <= 15,
-        text: "The DMV. The line snakes out the door and the fluorescent lights hum. You have your birth certificate and the day center's address. A state ID costs $20 and the wait looks like hours.",
+        condition: () => state.mode === 'goal' && state.flags.hasBirthCert && !state.hasID && !state.flags.idOrdered && state.timeHour >= 9 && state.timeHour <= 15,
+        text: () => {
+            const viaMotel = (state.flags.motelDaysRemaining || 0) > 0;
+            return "The DMV. The line snakes out the door and the fluorescent lights hum. You have your birth certificate and " +
+                (viaMotel
+                    ? "a paid-up motel receipt — a private address, real proof of residency."
+                    : "the day center's mailing address.") +
+                " A state ID costs $20, and the card comes by mail: " +
+                (viaMotel
+                    ? "about four days to a street address."
+                    : "mail routed through a day center gets flagged for manual review — ten days, if nothing goes wrong.");
+        },
         effects: { timePassed: 0.2 },
         choices: [
-            { text: "Wait in line and pay for the ID ($20.00).", requires: { cash: 20.00 }, effects: { cash: -20.00, warmth: -10, hunger: -15, mentalFortitude: 10, timePassed: 3, hasID: true }, nextScenario: 'dmv_success' },
+            {
+                text: "Wait in line and pay for the ID ($20.00).",
+                requires: { cash: 20.00 },
+                customAction: () => {
+                    const viaMotel = (state.flags.motelDaysRemaining || 0) > 0;
+                    state.flags.idOrdered = true;
+                    state.flags.idViaMotel = viaMotel;
+                    state.flags.idArrivesDay = state.day + (viaMotel ? 4 : 10);
+                    applyEffects({ cash: -20.00, warmth: -10, hunger: -15, mentalFortitude: 10, timePassed: 3 });
+                    loadScenario('dmv_ordered');
+                }
+            },
             { text: "You can't face that line today. Leave.", nextScenario: null }
         ]
     },
     {
-        id: 'dmv_success',
+        id: 'dmv_ordered',
         notRandom: true,
-        text: "Three hours later, a clerk hands you a laminated card, still warm from the printer. Your own face looks back at you. You exist again, officially. Doors that were closed — shelters, clinics, real jobs, housing — just cracked open.",
+        text: () => "Three hours in a plastic chair for four minutes at the counter. The clerk checks your paperwork, takes your $20, snaps your photo, and slides you a paper receipt. 'The card comes by mail.' " +
+            (state.flags.idViaMotel
+                ? "It's addressed to your motel — should be about four days."
+                : "It's routed through the Hopewell Day Center's general delivery, and the clerk winces at the address: 'Those take ten days, minimum. Backlog.'") +
+            " Until it arrives, the receipt is the only proof you exist.",
+        choices: [ { text: "Step outside and start counting the days.", nextScenario: null } ]
+    },
+    {
+        id: 'id_arrives',
+        notRandom: false,
+        weight: 4,
+        condition: () => state.mode === 'goal' && state.flags.idOrdered && !state.hasID && state.day >= (state.flags.idArrivesDay || 0) && state.timeHour >= 9 && state.timeHour <= 16,
+        text: () => (state.flags.idViaMotel
+                ? "The motel clerk flags you down on your way past the office and holds up a stiff government envelope with your name on it."
+                : "You stop by the Hopewell Day Center to check the mail, and the volunteer hands you a stiff government envelope from the DMV.") +
+            " Inside: a laminated card, your own face looking back at you. You exist again, officially. Doors that were closed — shelters, clinics, real jobs, housing — just cracked open.",
+        effects: { mentalFortitude: 20, timePassed: 0.5, hasID: true },
         choices: [ { text: "Step outside, standing a little taller.", nextScenario: null } ]
     },
     {
@@ -903,8 +1046,20 @@ const scenarios = [
         notRandom: false,
         weight: 2,
         condition: () => state.timeHour >= 6 && state.timeHour <= 10 && state.flags.lastLaborDay !== state.day,
-        onLoad: () => { state.flags.lastLaborDay = state.day; },
-        text: "The day labor office on 3rd Street opens at dawn. Workers fill the plastic chairs while the dispatcher calls out tickets. General labor pays $10 an hour; the construction site tickets pay $15, but the dispatcher won't hand one over unless you're wearing steel-toe boots.",
+        onLoad: () => {
+            state.flags.lastLaborDay = state.day;
+            // No working phone means no dispatch texts: walk across town just to read the board
+            if (!phoneActive()) {
+                applyEffects({ timePassed: 2, hunger: -6, warmth: -10 });
+            }
+        },
+        text: () => {
+            const base = "The day labor office on 3rd Street opens at dawn. Workers fill the plastic chairs while the dispatcher calls out tickets. General labor pays $10 an hour; the construction site tickets pay $15, but the dispatcher won't hand one over unless you're wearing steel-toe boots.";
+            if (phoneActive()) {
+                return "Your prepaid phone buzzed at dawn — the dispatcher texted today's ticket list straight to you, so you came directly here with no wasted miles. " + base;
+            }
+            return `<span style="color: var(--accent-color);">No working phone means no dispatch calls. You spent two cold hours walking across town just to read the job board in person.</span><br><br>` + base;
+        },
         effects: { timePassed: 0.2 },
         choices: [
             { text: "Take a general labor ticket — moving furniture (4 hrs, $40.00).", requires: { health: 40, hunger: 30 }, effects: { cash: 40.00, health: -10, hunger: -25, mentalFortitude: 5, timePassed: 4 }, nextScenario: 'labor_done_general' },
@@ -1005,9 +1160,14 @@ function applyEffects(effects) {
     if (timePassed > 0) {
         const warmupDrain = 3 * state.difficultyMultiplier;
         const hungerDrain = 3 * state.difficultyMultiplier;
-        
+
+        // A recent hot coffee holds the hunger drain at bay, hour for hour
+        const coffeeHours = state.flags.coffeeHoursRemaining || 0;
+        const hungryHours = Math.max(0, timePassed - coffeeHours);
+        state.flags.coffeeHoursRemaining = Math.max(0, coffeeHours - timePassed);
+
         state.warmth -= warmupDrain * timePassed;
-        state.hunger -= hungerDrain * timePassed;
+        state.hunger -= hungerDrain * hungryHours;
         state.hygiene -= 1.5 * timePassed;
 
         // Being visibly unwashed wears on you
@@ -1102,24 +1262,29 @@ function loadScenario(id) {
         scenario.choices.forEach(choice => {
             const btn = document.createElement('button');
             btn.className = 'choice-btn';
-            
+
+            // Choice text and cash requirements may be functions of state (e.g. karma-discounted prices)
+            const choiceText = typeof choice.text === 'function' ? choice.text() : choice.text;
+
             let reqMet = true;
             let reqMsg = "";
             if (choice.requires) {
-                if (choice.requires.cash !== undefined && state.cash < choice.requires.cash) { reqMet = false; reqMsg = `(Requires $${choice.requires.cash.toFixed(2)})`; }
+                const cashReq = typeof choice.requires.cash === 'function' ? choice.requires.cash() : choice.requires.cash;
+                if (cashReq !== undefined && state.cash < cashReq) { reqMet = false; reqMsg = `(Requires $${cashReq.toFixed(2)})`; }
                 if (choice.requires.mentalFortitude !== undefined && state.mental < choice.requires.mentalFortitude) { reqMet = false; reqMsg = `(Requires ${choice.requires.mentalFortitude}% Mental Fortitude)`; }
                 if (choice.requires.health !== undefined && state.health < choice.requires.health) { reqMet = false; reqMsg = `(Requires ${choice.requires.health}% Health)`; }
                 if (choice.requires.hunger !== undefined && state.hunger < choice.requires.hunger) { reqMet = false; reqMsg = `(Requires ${choice.requires.hunger}% Hunger)`; }
                 if (choice.requires.flag !== undefined && !state.flags[choice.requires.flag]) { reqMet = false; reqMsg = choice.requires.flagLabel || '(Unavailable)'; }
+                if (choice.requires.notFlag !== undefined && state.flags[choice.requires.notFlag]) { reqMet = false; reqMsg = choice.requires.notFlagLabel || '(Unavailable)'; }
                 if (choice.requires.stash !== undefined && state.foodStash < choice.requires.stash) { reqMet = false; reqMsg = '(Nothing packed to eat)'; }
                 if (choice.requires.stashSpace && state.foodStash >= carryCapacity()) { reqMet = false; reqMsg = '(No room in your bag)'; }
             }
-            
+
             if (reqMet) {
-                btn.textContent = choice.text;
+                btn.textContent = choiceText;
                 btn.onclick = () => makeChoice(choice);
             } else {
-                btn.textContent = `${choice.text} ${reqMsg}`;
+                btn.textContent = `${choiceText} ${reqMsg}`;
                 btn.disabled = true;
                 btn.style.opacity = 0.5;
                 btn.style.cursor = 'not-allowed';
@@ -1159,6 +1324,17 @@ function renderGear() {
     else if (state.flags.backpackBroken) pack = 'Plastic grocery bag';
     items.push(`${pack} — meals: ${state.foodStash}/${carryCapacity()}`);
 
+    if (state.flags.hasPhone) {
+        if (phoneActive()) {
+            const daysLeft = (state.flags.phoneExpiryDay || 0) - state.day;
+            items.push(`Prepaid phone (active — ${daysLeft > 0 ? `${daysLeft} day${daysLeft === 1 ? '' : 's'} left` : 'expires tonight'})`);
+        } else {
+            items.push('Prepaid phone (no minutes)');
+        }
+    }
+    const motelDays = state.flags.motelDaysRemaining || 0;
+    if (motelDays > 0) items.push(`Motel residency proof (${motelDays} day${motelDays === 1 ? '' : 's'} remaining)`);
+
     if (state.flags.hasWorkBoots) items.push('Steel-toe work boots');
     else if (state.flags.hasNewShoes) items.push('Decent sneakers');
     if (state.flags.hasWinterCoat) items.push('Winter coat');
@@ -1169,6 +1345,7 @@ function renderGear() {
     } else {
         if (state.flags.hasMailingAddress) items.push('Mailing address (Hopewell)');
         if (state.flags.hasBirthCert) items.push('Birth certificate');
+        if (state.flags.idOrdered) items.push(`State ID (in the mail — day ${state.flags.idArrivesDay})`);
     }
 
     list.innerHTML = items.map(i => `<li>${i}</li>`).join('');

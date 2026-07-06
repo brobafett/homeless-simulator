@@ -75,11 +75,20 @@ state.day = state.flags.birthCertArrivesDay;
 loadScenario('mail_arrives');
 assert(state.flags.hasBirthCert === true, 'birth certificate received');
 
-// 4. DMV -> ID
+// 4. DMV -> ID application (the card comes by mail, not over the counter)
 topUp();
 loadScenario('dmv_visit');
 clickChoice('pay for the ID');
-assert(state.hasID === true, 'state ID obtained');
+assert(state.hasID === false, 'no instant ID — it comes by mail');
+assert(state.flags.idOrdered === true, 'ID application filed');
+assert(state.flags.idArrivesDay === state.day + 10, 'day-center address takes 10 days of processing');
+assert(Math.abs(state.cash - 55) < 0.01, 'paid $20 (cash now $' + state.cash.toFixed(2) + ')');
+
+// 4b. The ID arrives in the mail on or after the arrival day
+topUp();
+state.day = state.flags.idArrivesDay;
+loadScenario('id_arrives');
+assert(state.hasID === true, 'state ID received in the mail');
 
 // 5. Clothing closet -> clean clothes
 topUp();
@@ -116,11 +125,11 @@ loadScenario();
 assert(els['narrative-text'].innerHTML.includes("where you're spending the night"), 'find_shelter forced after 7 PM');
 assert(state.flags.lastShelterPromptDay === state.day, 'shelter prompt recorded for today');
 
-// --- Motel room: costs $45, safe night, wakes at 8 AM next day ---
+// --- Motel room: costs $50, safe night, wakes at 8 AM next day ---
 const dayBefore = state.day;
 clickChoice('Rent a room');
 clickChoice('budget motel');
-assert(Math.abs(state.cash - 55) < 0.01, 'motel cost $45 (cash now $' + state.cash.toFixed(2) + ')');
+assert(Math.abs(state.cash - 50) < 0.01, 'motel cost $50 (cash now $' + state.cash.toFixed(2) + ')');
 assert(state.day === dayBefore + 1 && state.timeHour === 8, 'woke at 8 AM the next day');
 assert(state.health === 100 && state.hunger === 100 && state.mental === 100 && state.hygiene === 100, 'motel fully restored stats including hygiene');
 
@@ -131,19 +140,130 @@ const rentBtn = els['choices-list'].children.find(b => b.textContent.includes('R
 assert(rentBtn && rentBtn.disabled, 'rent-a-room choice disabled when broke');
 
 // --- Room tiers: price buys quality ---
+const origRandom = Math.random;
 state.flags = {}; topUp(); state.cash = 30; state.timeHour = 20;
+Math.random = () => 0.9; // dodge the 20% flophouse robbery roll
 loadScenario('rent_room');
 clickChoice('flophouse');
+Math.random = origRandom;
 assert(Math.abs(state.cash - 12) < 0.01, 'flophouse cost $18 (cash now $' + state.cash.toFixed(2) + ')');
 assert(state.hygiene === 70 && state.mental === 80, 'flophouse gives a rougher night than the motel');
 assert(state.timeHour === 8, 'flophouse still sleeps through to morning');
 
-topUp(); state.cash = 100; state.foodStash = 0; state.timeHour = 20;
+// --- Flophouse can roll into an overnight robbery ---
+topUp(); state.cash = 50; state.timeHour = 20;
+Math.random = () => 0.1; // force the 20% roll
 loadScenario('rent_room');
-clickChoice('Grandview');
-assert(Math.abs(state.cash - 15) < 0.01, 'hotel cost $85 (cash now $' + state.cash.toFixed(2) + ')');
-assert(state.foodStash === 1, 'hotel breakfast packed a meal to go');
-assert(state.hygiene === 100 && state.mental === 100, 'hotel fully restored');
+clickChoice('flophouse');
+Math.random = origRandom;
+assert(els['narrative-text'].innerHTML.includes('hand reaching into your pockets'), 'flophouse robbery routes into shelter_robbery');
+Math.random = () => 0.9; // thief runs off when confronted
+clickChoice('Confront');
+Math.random = origRandom;
+assert(state.timeHour === 8, 'robbery night still resolves to morning');
+
+// --- Weekly motel: $200 up front buys six nights and a full mental reset ---
+state.flags = {}; topUp(); state.cash = 250; state.timeHour = 20;
+loadScenario('rent_room');
+clickChoice('Six nights');
+assert(Math.abs(state.cash - 50) < 0.01, 'weekly rate cost $200 (cash now $' + state.cash.toFixed(2) + ')');
+assert(state.mental === 100 && state.hygiene === 100, 'weekly motel fully restored, mental reset to 100');
+assert(state.flags.motelDaysRemaining === 5, 'five prepaid nights remain after sleeping the first');
+assert(els['gear-list'].innerHTML.includes('Motel residency proof'), 'gear panel shows motel residency proof');
+
+// Prepaid nights are free via find_shelter and tick down each day
+topUp(); state.timeHour = 20; state.flags.lastShelterPromptDay = 0;
+loadScenario('find_shelter');
+clickChoice('your motel room');
+assert(Math.abs(state.cash - 50) < 0.01, 'prepaid motel night costs nothing');
+assert(state.flags.motelDaysRemaining === 4, 'prepaid nights tick down as days advance');
+
+// --- Motel residency speeds up ID processing (4 days instead of 10) ---
+state.mode = 'goal'; state.hasID = false;
+state.flags.hasMailingAddress = true; state.flags.hasBirthCert = true;
+topUp(); state.cash = 50;
+loadScenario('dmv_visit');
+clickChoice('pay for the ID');
+assert(state.flags.idArrivesDay === state.day + 4, 'motel address: ID takes only 4 days');
+topUp(); state.day = state.flags.idArrivesDay;
+loadScenario('id_arrives');
+assert(state.hasID === true, 'ID delivered to the motel');
+state.hasID = false;
+
+// --- Lost wallet: returning it sets karma, coffee buff, and full warmth ---
+state.flags = {}; state.timeModifier = 1.0; topUp(); state.cash = 0; state.warmth = 30; state.mental = 60;
+loadScenario('lost_wallet');
+clickChoice('return it');
+assert(state.flags.returned_wallet === true, 'returned_wallet flag set');
+assert(Math.abs(state.cash - 20) < 0.01, 'wallet reward is $20');
+assert(state.flags.coffeeHoursRemaining === 3, 'coffee buff lasts 3 hours');
+assert(state.warmth === state.maxWarmthCapacity, 'coffee and gratitude warmed you through');
+assert(state.mental > 60, 'returning the wallet lifts mental fortitude');
+
+// Coffee buff pauses the passive hunger drain, hour for hour
+state.difficultyMultiplier = 1.0;
+state.hunger = 90;
+applyEffects({ timePassed: 2 });
+assert(state.hunger === 90, 'no hunger drain while the coffee lasts');
+assert(Math.abs(state.flags.coffeeHoursRemaining - 1) < 0.001, 'coffee hours tick down with time');
+applyEffects({ timePassed: 2 });
+assert(Math.abs(state.hunger - 87) < 0.01, 'hunger drain resumes once the coffee runs out (only 1 of 2 hours covered)');
+
+// --- Karma discount: 20% off the motel tiers after returning the wallet ---
+topUp(); state.cash = 100; state.timeHour = 20;
+loadScenario('rent_room');
+assert(els['narrative-text'].innerHTML.includes('wallet you returned'), 'rent_room text acknowledges the karma discount');
+clickChoice('budget motel');
+assert(Math.abs(state.cash - 60) < 0.01, 'karma discount: motel cost $40 (cash now $' + state.cash.toFixed(2) + ')');
+
+// --- Lost wallet: keeping the cash rolls $40-$120 and costs 30 mental ---
+state.flags = {}; topUp(); state.cash = 0;
+Math.random = () => 0.5; // midpoint roll: $80
+loadScenario('lost_wallet');
+clickChoice('Take the cash');
+Math.random = origRandom;
+assert(Math.abs(state.cash - 80) < 0.01, 'kept $80 (midpoint of the $40-$120 roll)');
+assert(Math.abs(state.mental - 70) < 0.01, 'keeping the cash costs 30 mental');
+assert(els['narrative-text'].innerHTML.includes('$80.00'), 'wallet_kept narrates the amount taken');
+
+topUp(); state.mental = 20;
+loadScenario('lost_wallet');
+const keepBtn = els['choices-list'].children.find(b => b.textContent.includes('Take the cash'));
+assert(keepBtn && keepBtn.disabled, 'keeping the cash is gated below 25% mental');
+
+// --- Prepaid phone: transit penalty without it, dispatch texts with it ---
+state.mode = 'goal'; state.flags = {}; state.timeModifier = 1.0; topUp(); state.cash = 0;
+state.timeHour = 7;
+loadScenario('labor_office');
+assert(Math.abs(state.timeHour - 9.2) < 0.01, 'no phone: 2-hour walk to check the board (time now ' + state.timeHour.toFixed(1) + ')');
+assert(state.warmth < 95, 'the cold walk cost warmth');
+assert(els['narrative-text'].innerHTML.includes('No working phone'), 'transit penalty notice shown');
+
+topUp(); state.cash = 40;
+loadScenario('convenience_store');
+clickChoice('prepaid phone');
+assert(state.flags.hasPhone === true, 'phone purchased');
+assert(state.flags.phoneExpiryDay === state.day + 5, 'phone loaded with 5 days of minutes');
+assert(Math.abs(state.cash - 20) < 0.01, 'phone cost $20');
+assert(els['gear-list'].innerHTML.includes('Prepaid phone (active'), 'gear panel shows the active phone');
+
+loadScenario('convenience_store');
+clickChoice('Top up');
+assert(state.flags.phoneExpiryDay === state.day + 10, 'top-up adds 5 more days');
+assert(Math.abs(state.cash - 10) < 0.01, 'top-up cost $10');
+
+loadScenario('convenience_store');
+const buyPhoneBtn = els['choices-list'].children.find(b => b.textContent.includes('Buy a prepaid phone'));
+assert(buyPhoneBtn && buyPhoneBtn.disabled, 'cannot buy a second phone');
+
+state.day++; topUp(); state.timeHour = 7;
+loadScenario('labor_office');
+assert(Math.abs(state.timeHour - 7.2) < 0.01, 'active phone skips the transit penalty');
+
+state.day = state.flags.phoneExpiryDay + 1;
+renderStats();
+assert(els['gear-list'].innerHTML.includes('no minutes'), 'gear panel shows the phone once the minutes run out');
+state.day = 15; // keep the clock sane for the rest of the suite
 
 // --- Storage: plastic bag holds 1 meal, heavy-duty pack holds 4 ---
 state.flags = { backpackBroken: true }; topUp(); state.cash = 20; state.foodStash = 0;
@@ -273,7 +393,9 @@ loadScenario('find_meal');
 clickChoice('dumpster');
 Math.random = realRandom;
 assert(els['narrative-text'].innerHTML.includes('faded canvas backpack'), 'dumpster dive found a backpack');
+Math.random = () => 0; // pin the follow-up random draw so backpack_breaks can't immediately re-fire
 clickChoice('Take it');
+Math.random = realRandom;
 assert(state.flags.backpackBroken === false, 'found backpack clears the broken flag');
 
 // --- Surplus store: used pack gated to broken, new pack ends breaks forever ---
