@@ -142,12 +142,14 @@ assert(rentBtn && rentBtn.disabled, 'rent-a-room choice disabled when broke');
 // --- Room tiers: price buys quality ---
 const origRandom = Math.random;
 state.flags = {}; topUp(); state.cash = 30; state.timeHour = 20;
+state.health = 50; state.mental = 50; state.hunger = 50; state.hygiene = 40;
 Math.random = () => 0.9; // dodge the 20% flophouse robbery roll
 loadScenario('rent_room');
 clickChoice('flophouse');
 Math.random = origRandom;
 assert(Math.abs(state.cash - 12) < 0.01, 'flophouse cost $18 (cash now $' + state.cash.toFixed(2) + ')');
-assert(state.hygiene === 70 && state.mental === 80, 'flophouse gives a rougher night than the motel');
+assert(state.health === 90 && state.mental === 80 && state.hunger === 85 && state.hygiene === 62,
+    'flophouse recovery is additive, not a reset (50/50/50/40 -> 90/80/85/62)');
 assert(state.timeHour === 8, 'flophouse still sleeps through to morning');
 
 // --- Flophouse can roll into an overnight robbery ---
@@ -189,6 +191,26 @@ topUp(); state.day = state.flags.idArrivesDay;
 loadScenario('id_arrives');
 assert(state.hasID === true, 'ID delivered to the motel');
 state.hasID = false;
+
+// --- Sleeping rough: additive recovery, so deprivation compounds ---
+state.flags = {}; topUp(); state.cash = 0; state.timeHour = 20;
+state.health = 60; state.mental = 60; state.warmth = 40; state.hunger = 50; state.hygiene = 50;
+Math.random = () => 0.9; // quiet night
+loadScenario('find_shelter');
+clickChoice('underpass');
+Math.random = origRandom;
+assert(state.timeHour === 8, 'rough night still ends at 8 AM');
+assert(state.health === 66 && state.mental === 68, 'rough sleep barely restores (60/60 -> 66/68)');
+assert(state.warmth === 50, 'no warmth reset under the underpass (40 -> 50)');
+
+// A bad roll makes the night actively worse
+state.flags = {}; topUp(); state.cash = 0; state.timeHour = 20;
+state.health = 60; state.mental = 60;
+Math.random = () => 0.1; // risk hits (0.1 < 0.25), roll 0.1 < 0.45: sleepless night
+loadScenario('find_shelter');
+clickChoice('underpass');
+Math.random = origRandom;
+assert(state.health === 62 && state.mental === 56, 'a bad night outside costs more than it gives (60/60 -> 62/56)');
 
 // --- Lost wallet: returning it sets karma, coffee buff, and full warmth ---
 state.flags = {}; state.timeModifier = 1.0; topUp(); state.cash = 0; state.warmth = 30; state.mental = 60;
@@ -279,7 +301,9 @@ const togoBtn2 = els['choices-list'].children.find(b => b.textContent.includes('
 assert(togoBtn2 && !togoBtn2.disabled, 'heavy-duty pack has room for more');
 state.hunger = 40;
 loadScenario('find_meal');
+Math.random = () => 0; // pin the follow-up draw — a random scenario's entry effects could drain hunger
 clickChoice('Eat a packed meal');
+Math.random = origRandom;
 assert(state.foodStash === 0 && state.hunger > 60, 'ate from the stash (hunger now ' + Math.floor(state.hunger) + ')');
 
 // --- Boots make the labor office a guaranteed daily stop ---
@@ -371,7 +395,7 @@ assert(state.hygiene > 90, 'gym shower restored hygiene (now ' + Math.floor(stat
 topUp(); state.hygiene = 20; state.cash = 0; state.timeHour = 20;
 loadScenario('find_shelter');
 clickChoice('downtown shelter');
-assert(state.hygiene === 100, 'shelter stay restored hygiene');
+assert(state.hygiene === 50, 'shelter shower helps but no longer wipes the slate (20 -> 50)');
 
 // --- Backpack: breaking once stops repeats until replaced ---
 state.flags = {}; topUp();

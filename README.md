@@ -21,7 +21,7 @@ You manage six things: **Health**, **Mental**, **Warmth**, **Hunger**, **Hygiene
 
 Some things that help:
 
-- **Nightfall is a decision.** Every evening you choose: the underpass, an abandoned building, a shelter bed (free, but keep a hand on your pockets), or a rented room — from an $18 flophouse bunk (with its own risks) to a motel with a door that locks. Six motel nights paid up front buy something rarer than sleep: a real address.
+- **Nightfall is a decision.** Every evening you choose: the underpass, an abandoned building, a shelter bed (free, but keep a hand on your pockets), or a rented room — from an $18 flophouse bunk (with its own risks) to a motel with a door that locks. Six motel nights paid up front buy something rarer than sleep: a real address. And sleep only restores what the spot allows — a rough night outside barely counts, and the deficit follows you into the next morning.
 - **Gear compounds.** Decent shoes stop ruining your days. Steel-toe boots unlock construction tickets at the day labor office — steady morning work at real pay. A $20 prepaid phone means the dispatcher texts you the ticket list instead of you walking two hours to read a board. A better backpack means carrying more food, and losing less when things go wrong.
 - **Paperwork is survival.** A day center's mail service leads to a birth certificate, which leads to an ID, which opens doors. A night at the shelter gets you the clinic referral that the front desk demands.
 - **Pack food while you can.** A $4 to-go meal in your bag is worth a lot at hour eighteen of a bad day.

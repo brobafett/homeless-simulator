@@ -124,64 +124,123 @@ function advanceDay() {
     }
 }
 
+// How much a night's sleep RESTORES, added toward each cap — never a hard reset.
+// The worse the spot, the less you actually recover, so deprivation compounds
+// across days instead of wiping clean every morning. These are the numbers to
+// tune once you playtest the spiral slope. (motel_weekly mental 100 is deliberate:
+// the weekly's signature perk is a full mental reset, per the original design spec.)
+const SLEEP_QUALITY = {
+    rough:        { health: 6,  mental: 8,  hunger: 4,  hygiene: 2,  fullWarmth: false, warmth: 10 },
+    shelter:      { health: 35, mental: 40, hunger: 40, hygiene: 30, fullWarmth: true },
+    flophouse:    { health: 40, mental: 30, hunger: 35, hygiene: 22, fullWarmth: true },
+    motel:        { health: 70, mental: 70, hunger: 60, hygiene: 80, fullWarmth: true },
+    motel_weekly: { health: 75, mental: 100, hunger: 60, hygiene: 85, fullWarmth: true }
+};
+
+// Advance to the next morning and apply additive restoration (clamped to caps).
+// opts: { healthPenalty, mentalPenalty, warmth } — warmth overrides rough warmth per spot.
+function applySleep(tier, opts = {}) {
+    const q = SLEEP_QUALITY[tier] || SLEEP_QUALITY.rough;
+
+    if (state.timeHour < 8) {
+        state.timeHour = 8;
+    } else {
+        advanceDay();
+        state.timeHour = 8;
+    }
+
+    state.health  = Math.min(100, state.health  + q.health);
+    state.mental  = Math.min(100, state.mental  + q.mental);
+    state.hunger  = Math.min(100, state.hunger  + q.hunger);
+    state.hygiene = Math.min(100, state.hygiene + q.hygiene);
+
+    if (q.fullWarmth) {
+        state.warmth = state.maxWarmthCapacity;
+    } else {
+        const w = opts.warmth !== undefined ? opts.warmth : (q.warmth || 0);
+        state.warmth = Math.min(state.maxWarmthCapacity, state.warmth + w);
+    }
+
+    if (opts.healthPenalty) state.health -= opts.healthPenalty;
+    if (opts.mentalPenalty) state.mental -= opts.mentalPenalty;
+
+    state.health = Math.max(0, state.health);
+    state.mental = Math.max(0, state.mental);
+}
+
+// Sleeping outside: barely restorative, and the night itself can go wrong
+function resolveRough(spot) {
+    const SPOTS = {
+        underpass: { warmth: 10, risk: 0.25 },
+        abandoned: { warmth: 16, risk: 0.40 } // warmer, but more dangerous
+    };
+    const s = SPOTS[spot] || SPOTS.underpass;
+
+    applySleep('rough', { warmth: s.warmth });
+
+    let msg;
+    if (Math.random() < s.risk) {
+        const roll = Math.random();
+        if (roll < 0.45) {
+            state.mental = Math.max(0, state.mental - 12);
+            state.health = Math.max(0, state.health - 4);
+            msg = "You never really slept. Every noise snapped you awake, and by first light you're wrung out and jittery.";
+        } else if (roll < 0.75 && state.cash > 0) {
+            const lost = Math.round(state.cash * (0.3 + Math.random() * 0.5) * 100) / 100;
+            state.cash = Math.max(0, state.cash - lost);
+            state.mental = Math.max(0, state.mental - 10);
+            msg = `You woke to someone going through your things. $${lost.toFixed(2)} gone. Out here, sleep is a luxury you pay for.`;
+        } else {
+            state.warmth = Math.max(0, state.warmth - 15);
+            state.health = Math.max(0, state.health - 8);
+            msg = "It turned bitter and wet overnight. You shivered through it and woke stiff, damp, and colder than when you lay down.";
+        }
+    } else {
+        msg = "You bed down and pull everything tight around you. Shallow, uneasy sleep — but the night passes and you make it to morning.";
+    }
+
+    renderStats();
+    if (checkGameStatus() !== "CONTINUE") return;
+
+    document.getElementById('narrative-text').innerHTML = `<p>${msg}</p>`;
+    document.getElementById('choices-list').innerHTML =
+        `<button class="choice-btn" onclick="loadScenario()">Face the day</button>`;
+}
+
 function resolveTheft(confront) {
-    let stolenAmount = 0;
     let mentalPenalty = 0;
     let healthPenalty = 0;
     let customMsg = "";
 
     if (!confront) {
-        const stolenPercent = Math.random() * 0.90;
-        stolenAmount = state.cash * stolenPercent;
+        const stolenAmount = state.cash * (Math.random() * 0.90);
         state.cash -= stolenAmount;
-        mentalPenalty = 10;
-        customMsg = `<br><br><span style="color: var(--accent-color);">You pretended to sleep. The thief took $${stolenAmount.toFixed(2)}. The helplessness reduces your mental fortitude.</span>`;
+        mentalPenalty = 15;
+        customMsg = `<br><br><span style="color: var(--accent-color);">You pretended to sleep. The thief took $${stolenAmount.toFixed(2)}. The helplessness sits heavy on you.</span>`;
     } else {
         if (Math.random() < 0.5) {
             healthPenalty = 20;
-            customMsg = `<br><br><span style="color: var(--accent-color);">You fought off the thief and kept your money, but you took a beating in the process.</span>`;
+            customMsg = `<br><br><span style="color: var(--accent-color);">You fought the thief off and kept your money, but took a beating for it.</span>`;
         } else {
-            customMsg = `<br><br><span style="color: #4bd863;">You startled the thief and they ran off! Your money is safe.</span>`;
+            customMsg = `<br><br><span style="color: #4bd863;">You startled the thief and they bolted. Your money's safe.</span>`;
         }
     }
 
-    if (state.timeHour < 8) {
-        state.timeHour = 8;
-    } else {
-        advanceDay();
-        state.timeHour = 8;
-    }
-    
-    state.health = Math.max(0, 100 - healthPenalty);
-    state.hunger = 100;
-    state.mental = Math.max(0, 100 - mentalPenalty);
-    state.warmth = state.maxWarmthCapacity;
-    state.hygiene = 100;
-    
+    // Finish the night wherever the robbery interrupted it (shelter or flophouse)
+    const tier = state.flags._pendingSleep || 'shelter';
+    state.flags._pendingSleep = null;
+    applySleep(tier, { healthPenalty, mentalPenalty });
+
     renderStats();
     if (checkGameStatus() !== "CONTINUE") return;
 
     document.getElementById('narrative-text').innerHTML = `<p>Morning comes.${customMsg}</p>`;
-    
-    const choicesContainer = document.getElementById('choices-list');
-    choicesContainer.innerHTML = `
-        <button class="choice-btn" onclick="loadScenario()">Step back outside</button>
-    `;
+    document.getElementById('choices-list').innerHTML =
+        `<button class="choice-btn" onclick="loadScenario()">Step back outside</button>`;
 }
 
 function resolveShelter() {
-    if (state.timeHour < 8) {
-        state.timeHour = 8;
-    } else {
-        advanceDay();
-        state.timeHour = 8;
-    }
-
-    state.health = 100;
-    state.hunger = 100;
-    state.mental = 100;
-    state.warmth = state.maxWarmthCapacity;
-    state.hygiene = 100;
+    applySleep('shelter');
 
     let referralMsg = "";
     if (!state.flags.hasShelterReferral) {
@@ -192,26 +251,24 @@ function resolveShelter() {
     renderStats();
     if (checkGameStatus() !== "CONTINUE") return;
 
-    document.getElementById('narrative-text').innerHTML = `<p>You got a warm bed for the night. You wake up feeling fully rested and ready to face a new day.${referralMsg}</p>`;
-    
-    const choicesContainer = document.getElementById('choices-list');
-    choicesContainer.innerHTML = `
-        <button class="choice-btn" onclick="loadScenario()">Step back outside</button>
-    `;
+    document.getElementById('narrative-text').innerHTML = `<p>You get a shelter bed for the night. It's not silent and it's not home, but you sleep behind a locked door and wake a little more human.${referralMsg}</p>`;
+    document.getElementById('choices-list').innerHTML =
+        `<button class="choice-btn" onclick="loadScenario()">Step back outside</button>`;
 }
 
+// Costs, perks, and flavor per rented tier — recovery amounts live in SLEEP_QUALITY
 const ROOM_TIERS = {
     flophouse: {
-        cost: 18, health: 90, mental: 80, hunger: 85, hygiene: 70, robberyChance: 0.2,
+        cost: 18, robberyChance: 0.2,
         msg: "A canvas cot in a room full of snoring strangers, a shared bathroom down the hall, and a mattress you try not to think about. You sleep with your shoes on and one eye open — but you sleep."
     },
     motel: {
-        cost: 50, discountable: true, health: 100, mental: 100, hunger: 100, hygiene: 100,
+        cost: 50, discountable: true,
         msg: "A hot shower, a real mattress, a door that locks. You raid the vending machine, sleep nine unbroken hours, and wake up feeling almost like your old self.",
         prepaidMsg: "Your key still works — of course it does; the room is paid for. A hot shower, a real mattress, a door nobody can move you along from. You sleep like a person with somewhere to be."
     },
     motel_weekly: {
-        cost: 200, discountable: true, nights: 6, health: 100, mental: 100, hunger: 100, hygiene: 100,
+        cost: 200, discountable: true, nights: 6,
         msg: "You count the bills out and the clerk slides you a brass key — yours for six nights. A door that locks. A shower. An address. You lie in the dark listening to the heater tick and, for the first time in months, your mind goes quiet."
     }
 };
@@ -230,22 +287,12 @@ function resolveRoom(tier, prepaid) {
 
     // Flophouse: open bunks and no locks — some nights the wrong person notices you
     if (room.robberyChance && Math.random() < room.robberyChance && state.cash > 0) {
+        state.flags._pendingSleep = tier;
         loadScenario('shelter_robbery');
         return;
     }
 
-    if (state.timeHour < 8) {
-        state.timeHour = 8;
-    } else {
-        advanceDay();
-        state.timeHour = 8;
-    }
-
-    state.health = room.health;
-    state.hunger = room.hunger;
-    state.mental = room.mental;
-    state.warmth = state.maxWarmthCapacity;
-    state.hygiene = room.hygiene;
+    applySleep(tier);
 
     renderStats();
     if (checkGameStatus() !== "CONTINUE") return;
@@ -291,18 +338,19 @@ const scenarios = [
         condition: () => state.timeHour >= 17 || state.timeHour <= 5,
         text: "The light is fading and the temperature is dropping fast. You need to figure out where you're spending the night.",
         choices: [
-            { text: "Head to the underpass.", effects: { health: 0, mentalFortitude: -2, warmth: 10, hunger: -10 } },
+            { text: "Bed down under the underpass for the night.", customAction: () => resolveRough('underpass') },
             {
                 text: "Try to get a bed at the downtown shelter.",
                 customAction: () => {
                     if (Math.random() < 0.03 && state.cash > 0) {
+                        state.flags._pendingSleep = 'shelter';
                         loadScenario('shelter_robbery');
                     } else {
                         resolveShelter();
                     }
                 }
             },
-            { text: "Hunker down in an abandoned building.", effects: { health: -5, mentalFortitude: -5, warmth: 15, hunger: -10 } },
+            { text: "Hunker down in an abandoned building for the night.", customAction: () => resolveRough('abandoned') },
             { text: "Head back to your motel room — it's paid through the week.", requires: { flag: 'motelDaysRemaining', flagLabel: '(No room paid up)' }, customAction: () => resolveRoom('motel', true) },
             { text: "Rent a room for the night (from $18.00).", requires: { cash: 18.00 }, nextScenario: 'rent_room' }
         ]
@@ -450,16 +498,18 @@ const scenarios = [
                 customAction: () => {
                     let effectsToApply = { hunger: 40, timePassed: 0 };
                     let msg = "<br><br>You ate the burrito. It was delicious and filling.";
-                    if (Math.random() < 0.3) { 
+                    if (Math.random() < 0.3) {
                         effectsToApply.health = -30;
                         msg += " <span style='color: var(--accent-color);'>But a few hours later, your stomach violently cramps. Food poisoning.</span>";
                     }
                     applyEffects(effectsToApply);
-                    
+                    renderStats();
+                    if (checkGameStatus() !== "CONTINUE") return; // death screen already shown
+
                     document.getElementById('narrative-text').innerHTML += msg;
-                    const choicesContainer = document.getElementById('choices-list');
-                    choicesContainer.innerHTML = `<button class="choice-btn" onclick="loadScenario()">Keep going</button>`;
-                } 
+                    document.getElementById('choices-list').innerHTML =
+                        `<button class="choice-btn" onclick="loadScenario()">Keep going</button>`;
+                }
             },
             { text: "Buy your own burrito from the truck ($7.00).", requires: { cash: 7.00 }, effects: { cash: -7.00, hunger: 50, warmth: 10, mentalFortitude: 10 }, nextScenario: null },
             { text: "Keep walking. Your dignity—and your stomach—can't take it right now.", nextScenario: "street_hungry", effects: { hunger: -5, mentalFortitude: 5 } }
