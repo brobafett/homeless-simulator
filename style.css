@@ -167,30 +167,130 @@ body {
 }
 
 @media (max-width: 768px) {
+    /* Small screens: let the page flow and scroll instead of pinning to one viewport */
+    body {
+        display: block;
+        height: auto;
+        min-height: 100vh;
+        min-height: 100dvh;
+        overflow-y: auto;
+    }
+
     .app-container {
         flex-direction: column;
+        height: auto;
+        min-height: 100vh;
+        min-height: 100dvh;
     }
-    
+
     .dashboard {
         width: 100%;
         border-right: none;
         border-bottom: 1px solid var(--border-color);
-        padding: 1rem;
-        position: sticky;
-        top: 0;
+        padding: 0.75rem;
+        gap: 0.75rem;
+        box-shadow: none;
     }
-    
+
+    .dashboard h2 {
+        font-size: 1rem;
+        padding-bottom: 0.5rem;
+    }
+
     .stat-grid {
-        flex-direction: row;
-        flex-wrap: wrap;
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 0.5rem;
     }
-    
+
     .stat-card {
-        flex: 1 1 calc(33.333% - 1rem);
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 0.2rem;
+        padding: 0.5rem 0.6rem;
     }
-    
+
+    /* The time card runs long ("8:00 AM (Day 12)") — give it the full row */
+    .stat-card:last-child {
+        grid-column: 1 / -1;
+        flex-direction: row;
+        justify-content: space-between;
+        align-items: center;
+    }
+
+    .stat-label {
+        font-size: 0.65rem;
+    }
+
+    .stat-value {
+        font-size: 0.95rem;
+    }
+
+    #housing-checklist h3, #endless-counter h3, #gear-section h3 {
+        font-size: 0.9rem;
+        margin-top: 0.25rem;
+        margin-bottom: 0.5rem;
+    }
+
+    .checklist {
+        font-size: 0.85rem;
+        gap: 0.4rem;
+    }
+
+    .day-counter-display {
+        font-size: 1.75rem;
+    }
+
     .game-area {
+        padding: 1rem;
+        gap: 1rem;
+        overflow-y: visible;
+    }
+
+    .narrative-box {
+        padding: 1.25rem;
+        font-size: 1.05rem;
+        min-height: 0;
+    }
+
+    .choice-btn {
+        padding: 1rem;
+        font-size: 0.95rem;
+    }
+
+    /* Title screen: stack the mode buttons and allow scrolling */
+    .title-screen {
+        height: auto;
+        min-height: 100vh;
+        min-height: 100dvh;
         padding: 1.5rem;
+    }
+
+    .game-title {
+        font-size: 2.5rem;
+    }
+
+    .subtitle {
+        font-size: 1.1rem;
+        margin-bottom: 2rem;
+    }
+
+    .mode-selection {
+        flex-direction: column;
+        gap: 1rem;
+        width: 100%;
+    }
+
+    .mode-btn {
+        padding: 1.25rem;
+    }
+
+    .mode-btn strong {
+        font-size: 1.2rem;
+    }
+
+    .storage-note {
+        margin-top: 1.5rem;
     }
 }
 
