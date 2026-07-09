@@ -229,7 +229,7 @@ applyEffects({ timePassed: 2 });
 assert(state.hunger === 90, 'no hunger drain while the coffee lasts');
 assert(Math.abs(state.flags.coffeeHoursRemaining - 1) < 0.001, 'coffee hours tick down with time');
 applyEffects({ timePassed: 2 });
-assert(Math.abs(state.hunger - 87) < 0.01, 'hunger drain resumes once the coffee runs out (only 1 of 2 hours covered)');
+assert(Math.abs(state.hunger - 87.5) < 0.01, 'hunger drain resumes once the coffee runs out (only 1 of 2 hours covered)');
 
 // --- Karma discount: 20% off the motel tiers after returning the wallet ---
 topUp(); state.cash = 100; state.timeHour = 20;
@@ -488,6 +488,80 @@ renderStats(); // death -> endGame -> save wiped
 assert(loadSave() === null, 'death wipes the save');
 assert(els['narrative-text'].innerHTML.includes('GAME OVER'), 'death screen shown');
 state.health = 100; // revive for cleanliness
+
+// --- Starvation: an empty stomach drains health instead of killing outright ---
+state.mode = 'goal'; state.flags = {}; state.timeModifier = 1.0; state.difficultyMultiplier = 1.0;
+topUp(); state.hunger = 2; state.health = 80; state.mental = 80;
+applyEffects({ timePassed: 2 }); // 5 hunger drain vs 2 available: 3-point deficit
+assert(state.hunger === 0, 'hunger clamps at 0 instead of going negative');
+assert(Math.abs(state.health - 77.75) < 0.01, 'the deficit converts into health damage (now ' + state.health.toFixed(2) + ')');
+assert(checkGameStatus() === 'CONTINUE', 'hitting 0 hunger is not instant death');
+state.hunger = 0; state.health = 5;
+applyEffects({ timePassed: 4 });
+assert(checkGameStatus().includes('Starvation'), 'prolonged starvation still kills, through health');
+state.health = 100; state.hunger = 100; // revive
+
+// --- Food bank: multi-day supply, limited to once every few days ---
+state.flags = { hasSturdyBackpack: true }; topUp(); state.foodStash = 0;
+loadScenario('food_bank');
+clickChoice('Sign in');
+assert(state.foodStash === 3, 'pantry visit stocks three meals when the bag has room');
+assert(state.flags.nextFoodBankDay === state.day + 4, 'pantry locked out for the next few days');
+let pantryRepeat = false;
+for (let i = 0; i < 100; i++) {
+    topUp();
+    loadScenario();
+    if (els['narrative-text'].innerHTML.includes('FOOD PANTRY')) pantryRepeat = true;
+}
+assert(!pantryRepeat, 'food bank never reappears during the lockout window');
+state.day = state.flags.nextFoodBankDay;
+topUp();
+loadScenario('food_bank');
+const pantryBtn = els['choices-list'].children.find(b => b.textContent.includes('Sign in'));
+assert(pantryBtn && !pantryBtn.disabled, 'food bank opens up again once the lockout passes');
+
+// --- Soup kitchen keeps set lunch hours ---
+state.flags = {};
+let lunchAfterHours = false;
+for (let i = 0; i < 200; i++) {
+    topUp(); state.timeHour = 15;
+    loadScenario();
+    if (els['narrative-text'].innerHTML.includes('dining hall serves')) lunchAfterHours = true;
+}
+assert(!lunchAfterHours, 'soup kitchen lunch never appears outside serving hours');
+topUp(); state.timeHour = 11;
+loadScenario('soup_kitchen');
+clickChoice('Join the line');
+assert(state.hunger === 100 && els['narrative-text'].innerHTML.includes('tray'), 'the lunch line ends in a hot meal');
+
+// --- Combined actions: eating can piggyback on riding out the elements ---
+state.flags = {}; state.timeModifier = 1.0; topUp(); state.foodStash = 1; state.hunger = 50;
+const hourBefore = state.timeHour;
+loadScenario('subway_ride');
+Math.random = () => 0; // pin the follow-up draw to find_meal (no entry effects)
+clickChoice('packed meal');
+Math.random = origRandom;
+assert(state.hunger > 80, 'eating on the train restores hunger (now ' + Math.floor(state.hunger) + ')');
+assert(state.timeHour === hourBefore, 'eating on the train costs no extra time');
+
+topUp(); state.foodStash = 1; state.hunger = 40; state.warmth = 50;
+loadScenario('library_refuge');
+clickChoice('corner carrel');
+assert(state.hunger > 60, 'eating while drying off in the library restores hunger (now ' + Math.floor(state.hunger) + ')');
+assert(state.warmth > 60, 'sheltering from the rain also restores warmth (now ' + Math.floor(state.warmth) + ')');
+assert(els['narrative-text'].innerHTML.includes('carrel'), 'the combined choice gets its own scene');
+
+// --- The walk back from work passes the convenience store ---
+state.flags = { hasPhone: true, phoneExpiryDay: state.day + 1 }; topUp(); state.cash = 50;
+loadScenario('labor_done_general');
+assert(els['narrative-text'].innerHTML.includes('last minutes'), 'job-done scene warns when the phone is about to die');
+clickChoice('convenience store');
+assert(els['narrative-text'].innerHTML.includes('top-up'), 'store reachable straight from the job site');
+clickChoice('Top up');
+assert(state.flags.phoneExpiryDay === state.day + 6, 'topped up on the way home from work');
+loadScenario('labor_done_construction');
+const storeBtn = els['choices-list'].children.find(b => b.textContent.includes('convenience store'));
+assert(storeBtn && !storeBtn.disabled, 'construction jobs offer the same store stop');
 
 console.log(failures === 0 ? '\nALL TESTS PASSED' : '\n' + failures + ' FAILURES');
 process.exit(failures === 0 ? 0 : 1);

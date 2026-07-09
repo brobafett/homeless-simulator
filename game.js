@@ -75,6 +75,21 @@ function phoneActive() {
     return !!state.flags.hasPhone && state.day <= (state.flags.phoneExpiryDay || 0);
 }
 
+// The walk home from a job passes the corner store — nudge harder when the phone is about to die
+function walkHomeStoreLine() {
+    const route = " The route back into downtown passes the corner convenience store, its lights already on.";
+    if (state.flags.hasPhone && !phoneActive()) {
+        return route + ` <span style="color: var(--accent-color);">Your phone has been dead for days — no minutes means no dispatch texts tomorrow.</span>`;
+    }
+    if (state.flags.hasPhone) {
+        const daysLeft = (state.flags.phoneExpiryDay || 0) - state.day;
+        if (daysLeft <= 1) {
+            return route + ` <span style="color: var(--accent-color);">Your phone is down to its last minutes — it goes dark ${daysLeft <= 0 ? 'tonight' : 'tomorrow'} unless you top it up.</span>`;
+        }
+    }
+    return route;
+}
+
 // How many packed meals your current bag can hold
 function carryCapacity() {
     if (state.flags.hasSturdyBackpack) return 4;
@@ -98,10 +113,11 @@ function startGame(mode) {
 }
 
 function checkGameStatus() {
-    // 1. Check for Loss
-    if (state.health <= 0 || state.hunger <= 0 || (state.warmth <= 0 && state.health < 50) || state.mental <= 0) {
+    // 1. Check for Loss. An empty stomach doesn't kill on its own — starvation
+    // drains health in applyEffects, so the fatal blow still lands through health.
+    if (state.health <= 0 || (state.warmth <= 0 && state.health < 50) || state.mental <= 0) {
         let reason = "You succumbed to the elements.";
-        if (state.hunger <= 0) reason = "Starvation has overtaken you.";
+        if (state.health <= 0 && state.hunger <= 0) reason = "Starvation has overtaken you.";
         if (state.mental <= 0) reason = "Your spirit broke.";
         return "GAME OVER: " + reason + " You survived " + state.day + " days.";
     }
@@ -315,7 +331,7 @@ const scenarios = [
             "Your stomach growls violently. The cold morning air bites at your skin. You need food soon or you won't have the energy to keep moving. What do you do?" : 
             "You are feeling peckish. It might be a good idea to secure a meal while you have the chance. What do you do?",
         choices: [
-            { text: "Beg outside the local bakery.", effects: { health: -2, mentalFortitude: -2, warmth: -10, hunger: 10, cash: 2.50 } },
+            { text: "Beg outside the local bakery.", effects: { health: -2, mentalFortitude: -2, warmth: -5, hunger: 10, cash: 2.50 } },
             { text: "Search the dumpster behind the grocery store.", customAction: () => {
                 applyEffects({ health: -5, mentalFortitude: -5, warmth: -10, hunger: 30 });
                 if (state.flags.backpackBroken && Math.random() < 0.35) {
@@ -324,7 +340,7 @@ const scenarios = [
                     loadScenario();
                 }
             }},
-            { text: "Visit the busy intersection to panhandle.", effects: { health: -2, mentalFortitude: -5, warmth: -15, hunger: -10, cash: 5.00 } },
+            { text: "Visit the busy intersection to panhandle.", effects: { health: -2, mentalFortitude: -5, warmth: -10, hunger: -5, cash: 5.00 } },
             { text: "Buy hot soup from a local deli ($3.00)", requires: { cash: 3.00 }, effects: { cash: -3.00, health: 5, mentalFortitude: 15, warmth: 35, hunger: 40 } },
             { text: "Get a cup of hot coffee ($1.00)", requires: { cash: 1.00 }, effects: { cash: -1.00, health: 2, mentalFortitude: 15, warmth: 20, hunger: 5 } },
             { text: "Sit down for a full hot meal at the diner ($8.00)", requires: { cash: 8.00 }, effects: { cash: -8.00, health: 10, mentalFortitude: 20, warmth: 30, hunger: 70 } },
@@ -386,16 +402,17 @@ const scenarios = [
         notRandom: false,
         text: "The streets are relatively quiet. A rare moment of stillness, but the constant pressure of survival never really leaves you.",
         choices: [
-            { text: "Rest on a park bench.", effects: { health: 5, mentalFortitude: 15, warmth: -15, hunger: -10 } },
+            { text: "Rest on a park bench.", effects: { health: 5, mentalFortitude: 15, warmth: -8, hunger: -5 } },
             { text: "Wander and collect cans for recycling.", customAction: () => {
-                applyEffects({ health: -5, mentalFortitude: 5, warmth: -10, hunger: -15, cash: 3.50 });
+                applyEffects({ health: -5, mentalFortitude: 5, warmth: -10, hunger: -8, cash: 3.50 });
                 if (state.flags.backpackBroken && Math.random() < 0.35) {
                     loadScenario('dumpster_backpack');
                 } else {
                     loadScenario();
                 }
             }},
-            { text: "Read a discarded newspaper to stay sharp.", effects: { health: 0, mentalFortitude: 20, warmth: -10, hunger: -10 } },
+            { text: "Check the bins behind the restaurant row for tossed food.", effects: { hunger: 12, hygiene: -4, mentalFortitude: -3, timePassed: 0.4 } },
+            { text: "Read a discarded newspaper to stay sharp.", effects: { health: 0, mentalFortitude: 20, warmth: -5, hunger: -5 } },
             { text: "Warm up with a cup of hot soup ($3.00)", requires: { cash: 3.00 }, effects: { cash: -3.00, health: 5, mentalFortitude: 15, warmth: 35, hunger: 30 } },
             { text: "Get a cup of hot coffee ($1.00)", requires: { cash: 1.00 }, effects: { cash: -1.00, health: 2, mentalFortitude: 15, warmth: 20, hunger: 5 } },
             { text: "Eat a packed meal from your bag.", requires: { stash: 1 }, effects: { foodStash: -1, hunger: 35, mentalFortitude: 5, timePassed: 0.3 } },
@@ -470,9 +487,10 @@ const scenarios = [
         notRandom: false,
         condition: () => state.timeHour >= 9 && state.timeHour <= 19,
         text: "It's pouring rain. You step into the public library to get dry and charge your phone. Your backpack is soaked and leaks a small puddle onto the linoleum. Within five minutes, a security guard steps into your line of sight, arms crossed, staring at you.",
-        effects: { warmth: 15, mentalFortitude: -5, timePassed: 1 },
+        effects: { warmth: 15, mentalFortitude: -5, timePassed: 0.5 },
         choices: [
             { text: "Keep your head down, mimic reading a heavy book, and try to blend in.", nextScenario: "library_stay_quiet" },
+            { text: "Find a corner carrel, spread your wet layers to dry, and quietly eat something from your bag.", requires: { stash: 1 }, effects: { foodStash: -1, hunger: 35, warmth: 15, mentalFortitude: 10, timePassed: 1.5 }, nextScenario: "library_dry_out" },
             { text: "Pack your things and leave before they ask you to. It's better than getting banned.", nextScenario: "back_in_rain", effects: { warmth: -20, mentalFortitude: -2 } }
         ]
     },
@@ -590,8 +608,12 @@ const scenarios = [
     {
         id: 'subway_ride',
         notRandom: true,
-        text: "The gentle rocking of the train and the blast of the heater offer a temporary escape from the harsh reality of the streets.",
-        choices: [ { text: "Exit the station.", nextScenario: null } ]
+        text: "The gentle rocking of the train and the blast of the heater offer a temporary escape from the harsh reality of the streets. Two hours to the end of the line and back — time that's yours for once, and warm.",
+        choices: [
+            { text: "Eat a packed meal while the city slides past the window.", requires: { stash: 1 }, effects: { foodStash: -1, hunger: 35, mentalFortitude: 5, timePassed: 0 }, nextScenario: null },
+            { text: "Doze against the window, hood up.", effects: { health: 5, mentalFortitude: 5, timePassed: 0 }, nextScenario: null },
+            { text: "Just watch the stations go by, then exit.", nextScenario: null }
+        ]
     },
     {
         id: 'subway_caught',
@@ -750,19 +772,92 @@ const scenarios = [
     {
         id: 'soup_kitchen',
         notRandom: false,
-        text: "You arrive at the local soup kitchen, but the line wraps around the block. It will easily take 3 hours of standing in the cold just to get inside.",
+        weight: 2,
+        // Lunch service keeps set hours — one of the few fixed points in the day
+        condition: () => state.timeHour >= 10 && state.timeHour <= 13,
+        text: "St. Brigid's dining hall serves a hot lunch from eleven to one, every day, no questions asked. The line already stretches along the fence, but it moves — the volunteers have this down to a rhythm.",
         effects: { timePassed: 0.1 },
         choices: [
-            { text: "Wait in line.", effects: { warmth: -20, hunger: 60, health: 10, mentalFortitude: -10, timePassed: 3 }, nextScenario: 'soup_kitchen_eat' },
-            { text: "It's too cold to wait. Leave.", nextScenario: null }
+            { text: "Join the line and wait for a tray.", effects: { warmth: 10, hunger: 60, health: 10, mentalFortitude: 5, timePassed: 1.5 }, nextScenario: 'soup_kitchen_eat' },
+            { text: "You can't spare the time today. Keep moving.", nextScenario: null }
         ]
     },
     {
         id: 'soup_kitchen_eat',
         notRandom: true,
-        text: "After hours of shivering, you are served a hot bowl of stew, bread, and an apple. It's the best thing you've tasted in days. On the way out, a volunteer presses a bagged sandwich into your hands for later.",
+        text: "Forty minutes in line, then a tray: stew, bread, an apple, coffee. The hall is loud and warm and nobody asks you for anything. On the way out, a volunteer presses a bagged sandwich into your hands for later.",
         effects: { foodStash: 1, timePassed: 0 },
         choices: [ { text: "Leave with a full stomach.", nextScenario: null } ]
+    },
+    {
+        id: 'food_bank',
+        notRandom: false,
+        weight: 2,
+        // The pantry serves each person once every few days — flags.nextFoodBankDay is the cooldown
+        condition: () => state.timeHour >= 9 && state.timeHour <= 16 && state.day >= (state.flags.nextFoodBankDay || 0),
+        text: "A sandwich board outside a church annex: COMMUNITY FOOD PANTRY — OPEN TODAY. Through the propped door you can see folding tables stacked with bread and canned goods, volunteers packing grocery bags. A woman with a clipboard catches your eye and waves you in — no sermon, no paperwork beyond a first name.",
+        effects: { timePassed: 0.1 },
+        choices: [
+            {
+                text: "Sign in and wait your turn.",
+                customAction: () => {
+                    state.flags.nextFoodBankDay = state.day + 4;
+                    applyEffects({ hunger: 25, warmth: 10, mentalFortitude: 10, foodStash: 3, timePassed: 1.5 });
+                    loadScenario('food_bank_supplied');
+                }
+            },
+            { text: "Keep moving. Pride, or momentum — you're not sure which.", nextScenario: null }
+        ]
+    },
+    {
+        id: 'food_bank_supplied',
+        notRandom: true,
+        text: () => {
+            const base = "They hand you a paper sack: bread, peanut butter, fruit cups, two ready-to-eat meals, and a granola bar you eat right there on the spot. 'Come back in a few days,' the woman says, like it's the most normal thing in the world.";
+            if (carryCapacity() <= 1) {
+                return base + " But most of it won't fit in the plastic bag holding your life together. You eat what you can on the steps and leave the rest on the give-away table — food you couldn't carry.";
+            }
+            if (state.foodStash >= carryCapacity()) {
+                return base + " Your bag is packed to the seams; whatever didn't fit went back on the table for the next person in line.";
+            }
+            return base + " Your bag rides heavier on the way out — the good kind of heavy. For once, tomorrow's meals are already solved.";
+        },
+        choices: [ { text: "Head out with your supplies.", nextScenario: null } ]
+    },
+    {
+        id: 'bakery_closing',
+        notRandom: false,
+        condition: () => state.timeHour >= 17 && state.timeHour <= 21,
+        text: "The bakery on the corner is shutting down for the night. A worker carries out a clear bag of unsold rolls and pastries — a whole day's leftovers, still wrapped — and sets it on the bin lid while she locks the back door.",
+        effects: { timePassed: 0.1 },
+        choices: [
+            {
+                text: "Ask if you can take some before it goes in the bin.",
+                customAction: () => {
+                    if (Math.random() < 0.75) {
+                        applyEffects({ hunger: 30, mentalFortitude: 8, foodStash: 1, timePassed: 0.3 });
+                        loadScenario('bakery_kind');
+                    } else {
+                        applyEffects({ mentalFortitude: -8, timePassed: 0.3 });
+                        loadScenario('bakery_refused');
+                    }
+                }
+            },
+            { text: "Wait until she goes inside, then take from the bin.", effects: { hunger: 25, hygiene: -4, mentalFortitude: -4, timePassed: 0.4 }, nextScenario: null },
+            { text: "Keep walking.", nextScenario: null }
+        ]
+    },
+    {
+        id: 'bakery_kind',
+        notRandom: true,
+        text: "She glances back at the door, then opens the bag. 'Take whatever you want — it's just going in the trash.' You fill your pockets with rolls, and she wraps two more in a paper bag for you. 'Same time most nights,' she says, and goes back inside.",
+        choices: [ { text: "Eat one while it's still warm.", nextScenario: null } ]
+    },
+    {
+        id: 'bakery_refused',
+        notRandom: true,
+        text: "She winces. 'I can't. Corporate policy — liability, they say. If they catch me handing it out I lose my shift.' She ties the bag shut and carries it back inside, apologizing twice. The rules would rather the food rot in a locked dumpster than reach you.",
+        choices: [ { text: "Move on.", nextScenario: null } ]
     },
     {
         id: 'lost_wallet',
@@ -1120,14 +1215,20 @@ const scenarios = [
     {
         id: 'labor_done_general',
         notRandom: true,
-        text: "Four hours of hauling couches and boxes up apartment stairs. Your back aches, but the dispatcher counts two twenties into your palm. Honest money.",
-        choices: [ { text: "Pocket the cash and stretch your back.", nextScenario: null } ]
+        text: () => "Four hours of hauling couches and boxes up apartment stairs. Your back aches, but the dispatcher counts two twenties into your palm. Honest money." + walkHomeStoreLine(),
+        choices: [
+            { text: "Stop by the convenience store on the walk back.", effects: { timePassed: 0.2 }, nextScenario: 'convenience_store' },
+            { text: "Pocket the cash and stretch your back.", nextScenario: null }
+        ]
     },
     {
         id: 'labor_done_construction',
         notRandom: true,
-        text: "Six hours on the site — hauling block, clearing debris, staying out of the crane's way. The foreman nods at your boots and says there's usually work for people who show up. $90, cash.",
-        choices: [ { text: "Head out, exhausted but flush.", nextScenario: null } ]
+        text: () => "Six hours on the site — hauling block, clearing debris, staying out of the crane's way. The foreman nods at your boots and says there's usually work for people who show up. $90, cash." + walkHomeStoreLine(),
+        choices: [
+            { text: "Stop by the convenience store on the walk back.", effects: { timePassed: 0.2 }, nextScenario: 'convenience_store' },
+            { text: "Head out, exhausted but flush.", nextScenario: null }
+        ]
     },
     // Placeholder transition scenarios
     {
@@ -1147,9 +1248,15 @@ const scenarios = [
     {
         id: "library_stay_quiet",
         notRandom: true,
-        text: "You stare at the book. The guard eventually walks away, but you spend the next two hours on edge, unable to actually read or relax.",
-        effects: { timePassed: 2, mentalFortitude: -5 },
+        text: "You stare at the book. The guard eventually drifts back to his post, but you spend the next hour on edge, never quite able to relax. Still — you're dry, you're warm, and nobody has told you to leave yet.",
+        effects: { timePassed: 1, warmth: 10, mentalFortitude: -3 },
         choices: [ { text: "Eventually leave the library.", nextScenario: null } ]
+    },
+    {
+        id: "library_dry_out",
+        notRandom: true,
+        text: "You find a carrel in the back corner, drape your wet jacket over the chair, and eat with your head down — one slow bite at a time, so no one notices. By the time the rain lets up, your clothes are half-dry and your stomach has stopped growling. The library asked nothing of you. One of the last places that doesn't.",
+        choices: [ { text: "Pack up and head back out.", nextScenario: null } ]
     },
     {
         id: "back_in_rain",
@@ -1209,7 +1316,7 @@ function applyEffects(effects) {
     
     if (timePassed > 0) {
         const warmupDrain = 3 * state.difficultyMultiplier;
-        const hungerDrain = 3 * state.difficultyMultiplier;
+        const hungerDrain = 2.5 * state.difficultyMultiplier;
 
         // A recent hot coffee holds the hunger drain at bay, hour for hour
         const coffeeHours = state.flags.coffeeHoursRemaining || 0;
@@ -1230,6 +1337,15 @@ function applyEffects(effects) {
             state.timeHour -= 24;
             advanceDay();
         }
+    }
+
+    // Starvation stage: running past empty doesn't kill outright — the hunger
+    // deficit converts into health and mental damage, a shrinking window to
+    // find food rather than a sudden stop.
+    if (state.hunger < 0) {
+        state.health += state.hunger * 0.75;
+        state.mental += state.hunger * 0.4;
+        state.hunger = 0;
     }
 
     state.health = Math.max(0, Math.min(100, state.health));
@@ -1405,7 +1521,7 @@ function renderStats() {
     updateElement('stat-health', `${Math.floor(state.health)}%`, state.health <= 30);
     updateElement('stat-mental', `${Math.floor(state.mental)}%`, state.mental <= 30);
     updateElement('stat-warmth', `${Math.floor(state.warmth)}%`, state.warmth <= 30);
-    updateElement('stat-hunger', `${Math.floor(state.hunger)}%`, state.hunger <= 30);
+    updateElement('stat-hunger', state.hunger <= 0 ? 'Starving' : `${Math.floor(state.hunger)}%`, state.hunger <= 30);
     updateElement('stat-hygiene', `${Math.floor(state.hygiene)}%`, state.hygiene <= 30);
     
     document.getElementById('stat-cash').textContent = `$${state.cash.toFixed(2)}`;
