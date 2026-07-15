@@ -438,7 +438,10 @@ const scenarios = [
         id: 'find_meal',
         notRandom: false,
         category: 'food',
-        text: () => state.hunger < 30 ? 
+        // A full stomach doesn't go looking for meals — below 70 the text is at
+        // least honest, and when everyone's fed the food lane yields its share
+        condition: () => state.hunger < 70,
+        text: () => state.hunger < 30 ?
             "Your stomach growls violently. The cold morning air bites at your skin. You need food soon or you won't have the energy to keep moving. What do you do?" : 
             "You are feeling peckish. It might be a good idea to secure a meal while you have the chance. What do you do?",
         choices: [
@@ -631,6 +634,9 @@ const scenarios = [
         id: "food_truck_encounter",
         notRandom: false,
         category: 'food',
+        // The text claims 18 foodless hours; the gate keeps that claim honest,
+        // and a bin burrito only tempts a stomach that's already arguing
+        condition: () => state.hunger < 55,
         text: "A tourist near a food truck plaza drops half a gourmet burrito into a trash can right in front of you. It's wrapped in foil and untouched on top of the bin. You haven't eaten in 18 hours.",
         effects: { timePassed: 0.2 },
         choices: [
