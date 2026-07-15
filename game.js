@@ -22,7 +22,23 @@ let state = {
         motelDaysRemaining: 0, // active prepaid motel nights; doubles as proof of residency
         idOrdered: false,
         idArrivesDay: 0,
-        returned_wallet: false
+        returned_wallet: false,
+        // Gear staging: the sleeping bag was always implicitly there — now it's a thing you can lose
+        hasSleepingBag: true,
+        gearStashed: false,
+        stashSpotQuality: 1, // 1 = a spot anyone would check; 2 = one somebody showed you
+        stashDay: 0,
+        gearAtMotel: false, // gear left in a paid-up motel room — a stash with a lock on it
+        // Mutual aid: Ray, the grapevine, and a reputation that deliberately never shows in the UI
+        metRay: false,
+        streetRep: 0,
+        knowsStashSpot: false,
+        // Shannon: a neighbor, not a mechanic — no tips, no meter, no arc
+        metShannon: false,
+        // Paul: Ray in ten years without the network. His scams only ever cost
+        // cash and hours — never papers, never quest progress
+        metPaul: false,
+        transitPasses: 0
     }
 };
 
@@ -55,6 +71,7 @@ function continueGame() {
     if (!saved || !saved.mode) return;
 
     Object.assign(state, saved); // merge over defaults so old saves survive new fields
+    recomputeTimeModifier();     // timeModifier is derived from flags, never trusted from the save
 
     document.getElementById('title-screen').style.display = 'none';
     document.getElementById('game-screen').style.display = 'flex';
@@ -95,6 +112,28 @@ function carryCapacity() {
     if (state.flags.hasSturdyBackpack) return 4;
     if (state.flags.backpackBroken) return 1; // plastic grocery bag
     return 2; // worn or scavenged backpack
+}
+
+// Walking speed is a fact of circumstance, not a stat: a flapping sole, a life
+// carried in a grocery bag, or the rare relief of moving without forty pounds on
+// your back. Derived from flags so the states compose instead of clobbering each
+// other — applyEffects recomputes this after every flag change.
+function recomputeTimeModifier() {
+    let m = 1.0;
+    if (state.flags.shoeBroken) m *= 1.3;        // limping on a torn sole
+    if (state.flags.luggingPlasticBag) m *= 1.5; // everything you own in one hand
+    if (state.flags.gearStashed) m *= 0.85;      // traveling light, for once
+    state.timeModifier = m;
+}
+
+// Old saves predate the flag, so "undefined" means the bag you always had
+function ownsSleepingBag() {
+    return state.flags.hasSleepingBag !== false;
+}
+
+// Owning a sleeping bag doesn't help if it's under a bush across town
+function sleepingBagTonight() {
+    return ownsSleepingBag() && !state.flags.gearStashed;
 }
 
 function startGame(mode) {
@@ -173,8 +212,9 @@ function applySleep(tier, opts = {}) {
     if (q.fullWarmth) {
         state.warmth = state.maxWarmthCapacity;
     } else {
+        // opts.warmth can be negative now (a bagless night outside costs warmth), so clamp both ends
         const w = opts.warmth !== undefined ? opts.warmth : (q.warmth || 0);
-        state.warmth = Math.min(state.maxWarmthCapacity, state.warmth + w);
+        state.warmth = Math.max(0, Math.min(state.maxWarmthCapacity, state.warmth + w));
     }
 
     if (opts.healthPenalty) state.health -= opts.healthPenalty;
@@ -192,10 +232,23 @@ function resolveRough(spot) {
     };
     const s = SPOTS[spot] || SPOTS.underpass;
 
-    applySleep('rough', { warmth: s.warmth });
+    // Without the sleeping bag — swept, abandoned, or stashed across town — a
+    // rough night stops being rest and starts being endurance
+    const bagless = !sleepingBagTonight();
+    // Splitting watches with Ray — capture before applySleep rolls the calendar forward
+    const watched = state.flags.sharedWatchDay === state.day;
+    applySleep('rough', bagless
+        ? { warmth: s.warmth - 18, healthPenalty: 4, mentalPenalty: 5 }
+        : { warmth: s.warmth });
 
     let msg;
-    if (Math.random() < s.risk) {
+    if (watched) {
+        // Nobody robs a sleeper with a lookout: no risk roll at all, and the
+        // half-night of real sleep restores more than a whole night of flinching
+        state.health = Math.min(100, state.health + 4);
+        state.mental = Math.min(100, state.mental + 8);
+        msg = "You and Ray split the night into watches — four hours down, four hours up, packs stacked between you. Nothing walks up on you. Nothing goes missing. The sleep you get is real sleep, because someone you trust is awake. Two people can hold a night that would eat one.";
+    } else if (Math.random() < s.risk) {
         const roll = Math.random();
         if (roll < 0.45) {
             state.mental = Math.max(0, state.mental - 12);
@@ -213,6 +266,10 @@ function resolveRough(spot) {
         }
     } else {
         msg = "You bed down and pull everything tight around you. Shallow, uneasy sleep — but the night passes and you make it to morning.";
+    }
+
+    if (bagless) {
+        msg += " No sleeping bag tonight — cardboard under you, your coat over you, and the cold finding every gap between the two.";
     }
 
     renderStats();
@@ -256,12 +313,19 @@ function resolveTheft(confront) {
 }
 
 function resolveShelter() {
+    // Ray called this place full tonight; if you got a bed anyway, he was wrong.
+    // Capture before applySleep rolls the calendar forward.
+    const rayWasWrong = state.flags.shelterTipDay === state.day && state.flags.shelterFullDay !== state.day;
+
     applySleep('shelter');
 
     let referralMsg = "";
     if (!state.flags.hasShelterReferral) {
         state.flags.hasShelterReferral = true;
         referralMsg = " On your way out, the intake worker stamps a slip of paper and presses it into your hand: a referral to the free health clinic. 'Hold onto that. They won't see you without it.'";
+    }
+    if (rayWasWrong) {
+        referralMsg += " Ray had this place full by six. He was wrong — there were beds to spare. Twenty-two years out here and the man is still not an oracle.";
     }
 
     renderStats();
@@ -308,25 +372,72 @@ function resolveRoom(tier, prepaid) {
         return;
     }
 
+    // Coming home to gear you left in the room: the stash resolves itself — no
+    // sweep roll, no walk across town, just your things where you put them
+    const reunited = state.flags.gearAtMotel && (tier === 'motel' || tier === 'motel_weekly');
+    if (reunited) {
+        state.flags.gearAtMotel = false;
+        state.flags.gearStashed = false;
+        recomputeTimeModifier();
+    }
+
     applySleep(tier);
 
     renderStats();
     if (checkGameStatus() !== "CONTINUE") return;
 
-    const msg = (prepaid && room.prepaidMsg) ? room.prepaidMsg : room.msg;
+    let msg = (prepaid && room.prepaidMsg) ? room.prepaidMsg : room.msg;
+    if (reunited) {
+        msg += " Your gear sits on the luggage rack exactly where you left it this morning — untouched, because nobody could touch it.";
+    }
     document.getElementById('narrative-text').innerHTML = `<p>${msg}</p>`;
+
+    // If the room is paid through tonight too, the morning offers what a bush
+    // never could: leave the heavy gear behind a locked door for the day
+    const roomTonight = (tier === 'motel' || tier === 'motel_weekly') &&
+        (state.flags.motelDaysRemaining || 0) > 0 &&
+        ownsSleepingBag() && !state.flags.gearStashed;
 
     const choicesContainer = document.getElementById('choices-list');
     choicesContainer.innerHTML = `
+        ${roomTonight ? `<button class="choice-btn" onclick="leaveGearAtMotel()">Leave the sleeping bag and heavy gear in the room — it's paid through tonight.</button>` : ''}
         <button class="choice-btn" onclick="loadScenario()">${prepaid ? 'Lock the door behind you and head out' : 'Check out and step outside'}</button>
     `;
 }
+
+// Leaving gear in a paid-up room costs nothing and risks nothing — the whole
+// point of a door that locks. The city's sweep schedule has no jurisdiction here.
+function leaveGearAtMotel() {
+    state.flags.gearStashed = true;
+    state.flags.gearAtMotel = true;
+    state.flags.stashDay = state.day;
+    recomputeTimeModifier();
+    loadScenario();
+}
+
+// The dispatcher's ticket list — shared between labor_office and labor_board so
+// stashing your gear first doesn't cost you the morning's options
+const LABOR_TICKETS = [
+    { text: "Take a general labor ticket — moving furniture (4 hrs, $40.00).", requires: { health: 40, hunger: 30 }, effects: { cash: 40.00, health: -10, hunger: -25, mentalFortitude: 5, timePassed: 4 }, nextScenario: 'labor_done_general' },
+    {
+        text: "Take a construction site ticket (6 hrs, $90.00).",
+        requires: { flag: 'hasWorkBoots', flagLabel: '(Requires work boots)', health: 50, hunger: 40 },
+        // You can't haul your bed to a jobsite and still lift block for six
+        // hours — stashed gear halves what the shift takes out of you
+        customAction: () => {
+            applyEffects({ cash: 90.00, health: state.flags.gearStashed ? -10 : -20, hunger: -40, warmth: 10, mentalFortitude: 10, timePassed: 6 });
+            loadScenario('labor_done_construction');
+        }
+    },
+    { text: "Leave. You're in no shape to work today.", nextScenario: null }
+];
 
 const scenarios = [
     // Original Scenarios Converted
     {
         id: 'find_meal',
         notRandom: false,
+        category: 'food',
         text: () => state.hunger < 30 ? 
             "Your stomach growls violently. The cold morning air bites at your skin. You need food soon or you won't have the energy to keep moving. What do you do?" : 
             "You are feeling peckish. It might be a good idea to secure a meal while you have the chance. What do you do?",
@@ -351,14 +462,20 @@ const scenarios = [
     {
         id: 'find_shelter',
         notRandom: false,
+        category: 'hazard',
         condition: () => state.timeHour >= 17 || state.timeHour <= 5,
         text: "The light is fading and the temperature is dropping fast. You need to figure out where you're spending the night.",
         choices: [
             { text: "Bed down under the underpass for the night.", customAction: () => resolveRough('underpass') },
             {
-                text: "Try to get a bed at the downtown shelter.",
+                text: () => state.flags.shelterTipDay === state.day
+                    ? "Try the downtown shelter anyway — Ray says they're full by six."
+                    : "Try to get a bed at the downtown shelter.",
                 customAction: () => {
-                    if (Math.random() < 0.03 && state.cash > 0) {
+                    // On nights Ray called full, the walk over ends at a closed door
+                    if (state.flags.shelterFullDay === state.day) {
+                        loadScenario('shelter_full');
+                    } else if (Math.random() < 0.03 && state.cash > 0) {
                         state.flags._pendingSleep = 'shelter';
                         loadScenario('shelter_robbery');
                     } else {
@@ -400,6 +517,7 @@ const scenarios = [
     {
         id: 'idle_time',
         notRandom: false,
+        category: 'encounter',
         text: "The streets are relatively quiet. A rare moment of stillness, but the constant pressure of survival never really leaves you.",
         choices: [
             { text: "Rest on a park bench.", effects: { health: 5, mentalFortitude: 15, warmth: -8, hunger: -5 } },
@@ -474,6 +592,7 @@ const scenarios = [
     {
         id: "intake_appointment",
         notRandom: false,
+        category: 'quest',
         condition: () => !state.hasID && state.timeHour >= 9 && state.timeHour <= 16 && !state.flags.intake_attempted,
         text: "You finally made it to your housing assessment appointment after walking 3 miles. The caseworker is sympathetic but looks at your clipboard. 'I need a state-issued photo ID and a verification of homelessness form from a registered shelter to process this.' You have neither, and the shelter won't give you a form without an ID.",
         effects: { hunger: -15, mentalFortitude: -25, timePassed: 3, flags: { intake_attempted: true } },
@@ -485,6 +604,7 @@ const scenarios = [
     {
         id: "library_refuge",
         notRandom: false,
+        category: 'encounter',
         condition: () => state.timeHour >= 9 && state.timeHour <= 19,
         text: "It's pouring rain. You step into the public library to get dry and charge your phone. Your backpack is soaked and leaks a small puddle onto the linoleum. Within five minutes, a security guard steps into your line of sight, arms crossed, staring at you.",
         effects: { warmth: 15, mentalFortitude: -5, timePassed: 0.5 },
@@ -497,17 +617,20 @@ const scenarios = [
     {
         id: "backpack_breaks",
         notRandom: false,
-        condition: () => !state.flags.backpackBroken && !state.flags.hasSturdyBackpack,
+        category: 'hazard',
+        // The scene narrates the sleeping bag spilling out, so it needs the bag on your back
+        condition: () => !state.flags.backpackBroken && !state.flags.hasSturdyBackpack && ownsSleepingBag() && !state.flags.gearStashed,
         text: "As you hurry across the intersection, the left strap of your overstuffed backpack snaps. Your sleeping bag, a change of clothes, and your plastic folder of vital documents spill onto the wet pavement. You can't carry it all loose.",
         effects: { mentalFortitude: -15, timePassed: 0.5, flags: { backpackBroken: true } },
         choices: [
-            { text: "Abandon the heavy sleeping bag. Keep the documents and extra clothes.", nextScenario: "street_lightweight", effects: { maxWarmthCapacity: -20 } },
-            { text: "Use a discarded plastic grocery bag to bundle the loose items. It will drastically slow your walking speed.", nextScenario: "street_with_plastic_bag", effects: { timeModifier: 1.5 } }
+            { text: "Abandon the heavy sleeping bag. Keep the documents and extra clothes.", nextScenario: "street_lightweight", effects: { maxWarmthCapacity: -20, flags: { hasSleepingBag: false } } },
+            { text: "Use a discarded plastic grocery bag to bundle the loose items. It will drastically slow your walking speed.", nextScenario: "street_with_plastic_bag", effects: { flags: { luggingPlasticBag: true } } }
         ]
     },
     {
         id: "food_truck_encounter",
         notRandom: false,
+        category: 'food',
         text: "A tourist near a food truck plaza drops half a gourmet burrito into a trash can right in front of you. It's wrapped in foil and untouched on top of the bin. You haven't eaten in 18 hours.",
         effects: { timePassed: 0.2 },
         choices: [
@@ -537,6 +660,7 @@ const scenarios = [
     {
         id: 'stray_dog',
         notRandom: false,
+        category: 'encounter',
         text: "A scruffy stray dog approaches you, tail wagging cautiously. It looks hungry, but it's friendly.",
         effects: { timePassed: 0.2 },
         choices: [
@@ -560,13 +684,14 @@ const scenarios = [
     {
         id: 'shoe_blowout',
         notRandom: false,
+        category: 'hazard',
         condition: () => !state.flags.hasNewShoes,
         text: "Disaster. The worn-out sole of your right shoe finally tears completely off. Walking on the exposed pavement is agonizing.",
         effects: { mentalFortitude: -20, timePassed: 0 },
         choices: [
             { text: "Buy some duct tape at a convenience store to patch it.", requires: { cash: 2.00 }, effects: { cash: -2.00, timePassed: 0.5 }, nextScenario: 'shoe_patched' },
             { text: "Tear a piece of your shirt to tie it together.", nextScenario: 'shoe_shirt', effects: { maxWarmthCapacity: -10, timePassed: 0.5 } },
-            { text: "Limp along with the broken shoe.", nextScenario: 'shoe_broken_limp', effects: { timeModifier: 1.3 } }
+            { text: "Limp along with the broken shoe.", nextScenario: 'shoe_broken_limp', effects: { flags: { shoeBroken: true } } }
         ]
     },
     {
@@ -590,10 +715,20 @@ const scenarios = [
     {
         id: 'public_transit',
         notRandom: false,
+        category: 'encounter',
         text: "You're freezing, and the subway station looks incredibly inviting. A heated train ride from one end of the line to the other would take 2 hours.",
         effects: { timePassed: 0.1 },
         choices: [
             { text: "Pay the fare.", requires: { cash: 2.75 }, effects: { cash: -2.75, warmth: 40, mentalFortitude: 10, timePassed: 2 }, nextScenario: 'subway_ride' },
+            {
+                text: "Swipe one of the day passes from Ray.",
+                hidden: () => !((state.flags.transitPasses || 0) > 0),
+                customAction: () => {
+                    state.flags.transitPasses--;
+                    applyEffects({ warmth: 40, mentalFortitude: 10, timePassed: 2 });
+                    loadScenario('subway_ride');
+                }
+            },
             { text: "Jump the turnstile.", customAction: () => {
                 if (Math.random() < 0.2) {
                     loadScenario('subway_caught');
@@ -625,6 +760,7 @@ const scenarios = [
     {
         id: 'medical_clinic',
         notRandom: false,
+        category: 'encounter',
         condition: () => state.timeHour >= 8 && state.timeHour <= 17,
         text: "You pass a free health clinic. You have a nagging cough that hasn't gone away for weeks.",
         effects: { timePassed: 0.1 },
@@ -639,6 +775,14 @@ const scenarios = [
         text: "The receptionist asks for an ID and insurance card. When you explain your situation, they say they can only see you if you have a referral from a shelter.",
         choices: [
             { text: "Hand over the referral slip from the downtown shelter.", requires: { flag: 'hasShelterReferral', flagLabel: '(Requires a shelter referral)' }, nextScenario: 'clinic_treated' },
+            {
+                text: "Ask about the Thursday walk-in list Ray mentioned.",
+                hidden: () => !state.flags.clinicWalkInTip,
+                customAction: () => {
+                    state.flags.clinicWalkInTip = false; // one favor per tip
+                    loadScenario('clinic_walkin');
+                }
+            },
             { text: "Argue that you need help now.", requires: { mentalFortitude: 50 }, nextScenario: 'clinic_argue' },
             { text: "Leave quietly.", effects: { mentalFortitude: -5 }, nextScenario: null }
         ]
@@ -660,6 +804,7 @@ const scenarios = [
     {
         id: 'gym_trial',
         notRandom: false,
+        category: 'encounter',
         condition: () => state.hygiene <= 40,
         text: "You can smell yourself, and so can everyone else. You stand outside a 24-hour fitness center, thinking about the showers inside.",
         effects: { timePassed: 0.1 },
@@ -693,6 +838,10 @@ const scenarios = [
     {
         id: 'bottle_return',
         notRandom: false,
+        category: 'work',
+        // The payout depends on hauling the bag to the recycling center, which keeps
+        // day hours — also stops this scene from owning the whole work lane at night
+        condition: () => state.timeHour >= 7 && state.timeHour <= 19,
         text: "You spot a garbage bag full of crushed aluminum cans sitting near an alley entrance. It's easily worth $10 at the recycling center. But there's a shopping cart parked nearby—someone might have staged it there.",
         effects: { timePassed: 0.1 },
         choices: [
@@ -723,12 +872,18 @@ const scenarios = [
     {
         id: 'winter_coat',
         notRandom: false,
-        condition: () => !state.flags.hasWinterCoat,
+        category: 'quest',
+        // Day hours (a bin at 3 AM was never real), plus a cooldown after a failed
+        // reach-in — you scraped your arm raw; you're not going back at dawn. Without
+        // the cooldown this scene re-rolls forever and, in endless mode, eventually
+        // owns the whole quest lane.
+        condition: () => !state.flags.hasWinterCoat && state.timeHour >= 7 && state.timeHour <= 20 && state.day >= (state.flags.nextCoatTryDay || 0),
         text: "You find a clothing donation bin. The anti-theft chute is jammed open slightly. You might be able to reach your arm in and pull something out.",
         effects: { timePassed: 0.2 },
         choices: [
             { text: "Reach in.", customAction: () => {
                 if (Math.random() < 0.3) {
+                    state.flags.nextCoatTryDay = state.day + 3;
                     loadScenario('coat_stuck');
                 } else {
                     applyEffects({ maxWarmthCapacity: 20, warmth: 20, flags: { hasWinterCoat: true } });
@@ -754,6 +909,7 @@ const scenarios = [
     {
         id: 'police_move_on',
         notRandom: false,
+        category: 'hazard',
         condition: () => state.timeHour >= 21 || state.timeHour <= 5,
         text: "You find a relatively safe, dry spot in a public park to rest your eyes. Just as you drift off, a flashlight shines in your face. 'You can't sleep here. Move along.'",
         effects: { timePassed: 1 },
@@ -772,6 +928,7 @@ const scenarios = [
     {
         id: 'soup_kitchen',
         notRandom: false,
+        category: 'food',
         weight: 2,
         // Lunch service keeps set hours — one of the few fixed points in the day
         condition: () => state.timeHour >= 10 && state.timeHour <= 13,
@@ -792,6 +949,7 @@ const scenarios = [
     {
         id: 'food_bank',
         notRandom: false,
+        category: 'food',
         weight: 2,
         // The pantry serves each person once every few days — flags.nextFoodBankDay is the cooldown
         condition: () => state.timeHour >= 9 && state.timeHour <= 16 && state.day >= (state.flags.nextFoodBankDay || 0),
@@ -827,6 +985,7 @@ const scenarios = [
     {
         id: 'bakery_closing',
         notRandom: false,
+        category: 'food',
         condition: () => state.timeHour >= 17 && state.timeHour <= 21,
         text: "The bakery on the corner is shutting down for the night. A worker carries out a clear bag of unsold rolls and pastries — a whole day's leftovers, still wrapped — and sets it on the bin lid while she locks the back door.",
         effects: { timePassed: 0.1 },
@@ -862,6 +1021,7 @@ const scenarios = [
     {
         id: 'lost_wallet',
         notRandom: false,
+        category: 'encounter',
         text: "While walking past a bus stop, you see a leather wallet on the ground. Inside, there is an ID, some credit cards, and a fold of cash — more than you've held in weeks.",
         effects: { timePassed: 0.1 },
         choices: [
@@ -902,6 +1062,7 @@ const scenarios = [
     {
         id: 'street_harassment',
         notRandom: false,
+        category: 'hazard',
         text: "A car full of teenagers slows down as it drives past you. One of them throws a half-empty soda cup at you, yelling an insult before speeding off. The sticky liquid gets on your jacket.",
         effects: { mentalFortitude: -10, timePassed: 0.1 },
         choices: [
@@ -919,7 +1080,10 @@ const scenarios = [
     {
         id: 'job_day_labor',
         notRandom: false,
-        condition: () => state.timeHour >= 6 && state.timeHour <= 14,
+        category: 'work',
+        // Runs to mid-afternoon so bottle_return doesn't spend five hours a day
+        // as the entire work lane — a 4-hour haul starting at 4 PM still ends by 8
+        condition: () => state.timeHour >= 6 && state.timeHour <= 16,
         text: "A contractor in a pickup truck pulls over. 'Need someone to help haul drywall for 4 hours. $10 an hour.'",
         effects: { timePassed: 0.1 },
         choices: [
@@ -936,6 +1100,7 @@ const scenarios = [
     {
         id: 'rainstorm_sudden',
         notRandom: false,
+        category: 'hazard',
         text: "The sky suddenly opens up into a torrential downpour. You have seconds to find cover before you are completely soaked.",
         effects: { timePassed: 0.1 },
         choices: [
@@ -954,6 +1119,7 @@ const scenarios = [
     {
         id: 'day_center',
         notRandom: false,
+        category: 'quest',
         weight: 3,
         condition: () => state.mode === 'goal' && !state.flags.hasMailingAddress && state.timeHour >= 9 && state.timeHour <= 16,
         text: "You pass the Hopewell Day Center — a squat brick building with a hand-painted sign. Inside there's coffee, a bathroom, and a volunteer at a folding table. She mentions they run a free mail service: you can use the center's address to receive letters, no questions asked.",
@@ -972,6 +1138,7 @@ const scenarios = [
     {
         id: 'order_birth_cert',
         notRandom: false,
+        category: 'quest',
         weight: 3,
         condition: () => state.mode === 'goal' && state.flags.hasMailingAddress && !state.flags.birthCertOrdered && !state.hasID && state.timeHour >= 9 && state.timeHour <= 19,
         text: "The library is warm and quiet. With the day center's address card in your pocket, you could finally order a replacement birth certificate from the state records office. Expedited processing costs $25 and takes a few days to arrive.",
@@ -999,6 +1166,7 @@ const scenarios = [
     {
         id: 'mail_arrives',
         notRandom: false,
+        category: 'quest',
         weight: 4,
         condition: () => state.mode === 'goal' && state.flags.birthCertOrdered && !state.flags.hasBirthCert && state.day >= state.flags.birthCertArrivesDay && state.timeHour >= 9 && state.timeHour <= 16,
         text: "You stop by the Hopewell Day Center to check the mail. The volunteer flips through a plastic bin and smiles as she hands you a stiff envelope from the state records office. Your birth certificate. Proof that you exist.",
@@ -1008,6 +1176,7 @@ const scenarios = [
     {
         id: 'dmv_visit',
         notRandom: false,
+        category: 'quest',
         weight: 3,
         condition: () => state.mode === 'goal' && state.flags.hasBirthCert && !state.hasID && !state.flags.idOrdered && state.timeHour >= 9 && state.timeHour <= 15,
         text: () => {
@@ -1051,6 +1220,7 @@ const scenarios = [
     {
         id: 'id_arrives',
         notRandom: false,
+        category: 'quest',
         weight: 4,
         condition: () => state.mode === 'goal' && state.flags.idOrdered && !state.hasID && state.day >= (state.flags.idArrivesDay || 0) && state.timeHour >= 9 && state.timeHour <= 16,
         text: () => (state.flags.idViaMotel
@@ -1063,6 +1233,7 @@ const scenarios = [
     {
         id: 'clothing_closet',
         notRandom: false,
+        category: 'quest',
         weight: 3,
         condition: () => state.mode === 'goal' && !state.hasCleanClothes && state.timeHour >= 9 && state.timeHour <= 17,
         text: "A church basement runs a clothing closet today — a line of folding tables stacked with donated clothes. There's a wait, but it's free. Two blocks over, a thrift store sells clean, interview-ready outfits for cash.",
@@ -1083,6 +1254,7 @@ const scenarios = [
     {
         id: 'shoe_store',
         notRandom: false,
+        category: 'quest',
         weight: 2,
         condition: () => !state.flags.hasWorkBoots && state.timeHour >= 9 && state.timeHour <= 18,
         text: () => state.flags.hasNewShoes ?
@@ -1095,7 +1267,7 @@ const scenarios = [
                 requires: { cash: 12.00 },
                 customAction: () => {
                     state.flags.hasNewShoes = true;
-                    state.timeModifier = 1.0;
+                    state.flags.shoeBroken = false;
                     applyEffects({ cash: -12.00, mentalFortitude: 10, timePassed: 0.5 });
                     loadScenario('shoes_bought');
                 }
@@ -1106,7 +1278,7 @@ const scenarios = [
                 customAction: () => {
                     state.flags.hasNewShoes = true;
                     state.flags.hasWorkBoots = true;
-                    state.timeModifier = 1.0;
+                    state.flags.shoeBroken = false;
                     applyEffects({ cash: -35.00, mentalFortitude: 15, timePassed: 0.5 });
                     loadScenario('boots_bought');
                 }
@@ -1135,7 +1307,7 @@ const scenarios = [
                 text: "Take it and transfer your things.",
                 customAction: () => {
                     state.flags.backpackBroken = false;
-                    state.timeModifier = 1.0;
+                    state.flags.luggingPlasticBag = false;
                     applyEffects({ mentalFortitude: 10, timePassed: 0.3 });
                     loadScenario();
                 }
@@ -1145,6 +1317,7 @@ const scenarios = [
     {
         id: 'surplus_store',
         notRandom: false,
+        category: 'quest',
         weight: 2,
         condition: () => !state.flags.hasSturdyBackpack && state.timeHour >= 9 && state.timeHour <= 18,
         text: "An army surplus store has bins of used gear on the sidewalk — faded rucksacks, canteens, wool socks. Behind the counter hang the new heavy-duty packs: double-stitched straps, the kind that never let go.",
@@ -1155,7 +1328,7 @@ const scenarios = [
                 requires: { cash: 8.00, flag: 'backpackBroken', flagLabel: "(Your current pack is holding together)" },
                 customAction: () => {
                     state.flags.backpackBroken = false;
-                    state.timeModifier = 1.0;
+                    state.flags.luggingPlasticBag = false;
                     applyEffects({ cash: -8.00, mentalFortitude: 10, timePassed: 0.5 });
                     loadScenario('backpack_used_bought');
                 }
@@ -1166,7 +1339,7 @@ const scenarios = [
                 customAction: () => {
                     state.flags.backpackBroken = false;
                     state.flags.hasSturdyBackpack = true;
-                    state.timeModifier = 1.0;
+                    state.flags.luggingPlasticBag = false;
                     applyEffects({ cash: -30.00, mentalFortitude: 15, timePassed: 0.5 });
                     loadScenario('backpack_new_bought');
                 }
@@ -1189,6 +1362,7 @@ const scenarios = [
     {
         id: 'labor_office',
         notRandom: false,
+        category: 'work',
         weight: 2,
         condition: () => state.timeHour >= 6 && state.timeHour <= 10 && state.flags.lastLaborDay !== state.day,
         onLoad: () => {
@@ -1207,10 +1381,30 @@ const scenarios = [
         },
         effects: { timePassed: 0.2 },
         choices: [
-            { text: "Take a general labor ticket — moving furniture (4 hrs, $40.00).", requires: { health: 40, hunger: 30 }, effects: { cash: 40.00, health: -10, hunger: -25, mentalFortitude: 5, timePassed: 4 }, nextScenario: 'labor_done_general' },
-            { text: "Take a construction site ticket (6 hrs, $90.00).", requires: { flag: 'hasWorkBoots', flagLabel: '(Requires work boots)', health: 50, hunger: 40 }, effects: { cash: 90.00, health: -20, hunger: -40, warmth: 10, mentalFortitude: 10, timePassed: 6 }, nextScenario: 'labor_done_construction' },
-            { text: "Leave. You're in no shape to work today.", nextScenario: null }
+            {
+                // The stash decision lives here, in the one place it has real stakes:
+                // a lighter day, a cheaper shift, and the sweep schedule as counterparty
+                text: "Stash the sleeping bag and heavy gear out of sight first (20 min).",
+                hidden: () => !(ownsSleepingBag() && !state.flags.gearStashed),
+                customAction: () => {
+                    state.flags.gearStashed = true;
+                    state.flags.stashDay = state.day;
+                    state.flags.stashSpotQuality = state.flags.knowsStashSpot ? 2 : 1;
+                    applyEffects({ timePassed: 0.2 });
+                    loadScenario('labor_board');
+                }
+            },
+            ...LABOR_TICKETS
         ]
+    },
+    {
+        id: 'labor_board',
+        notRandom: true, // the office again, after stashing — same tickets, lighter shoulders
+        text: () => (state.flags.knowsStashSpot
+            ? "You detour two blocks to the gap behind the loading-dock fence on Merchant — Ray's spot — work the roll in deep, and double back. "
+            : "You wedge the roll into the gap behind the lot fence and drag a pallet slat over it. From the sidewalk, nothing shows. ")
+            + "Walking back in, your shoulders feel like a stranger's — lighter, quicker. The dispatcher is still working down the ticket list.",
+        choices: LABOR_TICKETS
     },
     {
         id: 'labor_done_general',
@@ -1228,6 +1422,624 @@ const scenarios = [
         choices: [
             { text: "Stop by the convenience store on the walk back.", effects: { timePassed: 0.2 }, nextScenario: 'convenience_store' },
             { text: "Head out, exhausted but flush.", nextScenario: null }
+        ]
+    },
+    // Gear staging: stash the heavy gear by day (a choice at the labor office),
+    // gamble on the city's sweep schedule by night
+    {
+        id: 'retrieve_stash',
+        notRandom: true, // forced from loadScenario at dusk while gear is stashed
+        onLoad: () => { state.flags.lastRetrievalPromptDay = state.day; },
+        text: () => {
+            const daysOut = state.day - (state.flags.stashDay || state.day);
+            let t = "The light is going, and everything you need for the night is still hidden across town.";
+            if (daysOut > 0) t += ` It's been out there ${daysOut === 1 ? 'a day and a night' : daysOut + ' days'} now.`;
+            return t + " Whatever this evening becomes, it starts with that walk — or with deciding not to make it.";
+        },
+        choices: [
+            {
+                text: "Walk back and pull your gear out.",
+                customAction: () => {
+                    // Sweep odds: 12% for an obvious spot, 5% for a good one — rare
+                    // enough that the night it happens actually lands. Leaving the
+                    // gear out overnight (the choice below) adds 8% per full day,
+                    // capped at 55%.
+                    const daysOut = state.day - (state.flags.stashDay || state.day);
+                    const base = (state.flags.stashSpotQuality || 1) >= 2 ? 0.05 : 0.12;
+                    const sweepChance = Math.min(0.55, base + 0.08 * daysOut);
+                    state.flags.gearStashed = false;
+                    if (Math.random() < sweepChance) {
+                        state.flags.hasSleepingBag = false;
+                        applyEffects({ maxWarmthCapacity: -20, mentalFortitude: -20, timePassed: 0.5 });
+                        loadScenario('stash_swept');
+                    } else {
+                        applyEffects({ mentalFortitude: 6, timePassed: 0.5 });
+                        loadScenario('stash_recovered');
+                    }
+                }
+            },
+            { text: "Leave it hidden. One more night without it.", effects: { timePassed: 0.1 }, nextScenario: null }
+        ]
+    },
+    {
+        id: 'stash_recovered',
+        notRandom: true,
+        text: "Your bag is where you left it — one corner damp, everything else untouched. You crouch there a second longer than you need to, hand flat on the fabric, just confirming it's real. Then you shoulder the weight, and tonight goes back to being an ordinary problem.",
+        choices: [ { text: "Head out with your gear.", nextScenario: null } ]
+    },
+    {
+        id: 'stash_swept',
+        notRandom: true,
+        text: "The spot is scraped clean — whatever leaned or grew there has been cut back and hauled off, the ground raked bare. A skid loader's tracks run straight through where your bag was. Zip-tied to the fence a few yards down is a laminated sheet: NOTICE OF SCHEDULED CLEANUP — ALL UNATTENDED PROPERTY WILL BE REMOVED AND DISPOSED OF. It's dated three days ago. It was posted facing the road, where the drivers could read it and you couldn't. Your sleeping bag, your spare clothes, the socks you were saving — compacted in a city truck by mid-afternoon, logged somewhere as debris. There's no one to argue with. There's nothing left to argue over.",
+        choices: [ { text: "There's nothing to pick up. Walk.", nextScenario: null } ]
+    },
+    {
+        id: 'motel_gear_desk',
+        notRandom: true, // forced from loadScenario the morning the prepaid week runs out with gear still inside
+        text: "Your week at the motel is up, and your gear was still in the room when housekeeping turned it. The clerk could have walked it straight to the dumpster — instead it's stacked behind the front desk, sleeping bag rolled the wrong way but rolled. 'Figured you'd be back for it,' they say, hauling it up onto the counter. Everything's there.",
+        choices: [
+            {
+                text: "Take your gear and thank them.",
+                customAction: () => {
+                    state.flags.gearAtMotel = false;
+                    state.flags.gearStashed = false;
+                    applyEffects({ mentalFortitude: 4, timePassed: 0.4 });
+                    loadScenario();
+                }
+            }
+        ]
+    },
+    {
+        id: 'outreach_bedroll',
+        notRandom: false,
+        category: 'encounter',
+        weight: 2,
+        // The way back after losing your bedding: free gear, if you can spare the hours
+        condition: () => !ownsSleepingBag() && state.timeHour >= 14 && state.timeHour <= 20,
+        text: "A church van idles at the corner with its rear doors open: a folding table, a coffee urn, and a wall of donated blankets and surplus sleeping bags. A volunteer works down the line — no clipboard, no questions, one bag per person. The line is long. It moves anyway.",
+        effects: { timePassed: 0.1 },
+        choices: [
+            { text: "Get in line and wait your turn.", effects: { warmth: 10, mentalFortitude: 10, maxWarmthCapacity: 20, timePassed: 2, flags: { hasSleepingBag: true } }, nextScenario: 'bedroll_received' },
+            { text: "Two hours is more than you have today. Keep moving.", nextScenario: null }
+        ]
+    },
+    {
+        id: 'bedroll_received',
+        notRandom: true,
+        text: "The volunteer sizes you up and hands over an army-surplus mummy bag, faintly musty, re-stitched along one seam by somebody's patient hands. 'That one's warm,' she says, and moves on to the next person. You strap it under your pack straps. Tonight has an answer again.",
+        choices: [ { text: "Carry it out of there.", nextScenario: null } ]
+    },
+    // Mutual aid: Ray, the grapevine, and the economy that doesn't show up on any ledger
+    {
+        id: 'ray_first_meeting',
+        notRandom: false,
+        category: 'encounter',
+        weight: 2,
+        condition: () => !state.flags.metRay && state.timeHour >= 8 && state.timeHour <= 20,
+        text: "A man is parked on a milk crate at the mouth of the alley off 4th — grey stubble, army coat, a cart tarped and bungeed with the precision of someone who has packed it ten thousand times. He isn't flying a sign and he doesn't look up hungry. He just nods, the way people nod out here: an acknowledgment, not an ask. 'They're running sweeps up Merchant this week,' he says, to you or to the street in general. 'In case you keep anything anywhere.'",
+        effects: { timePassed: 0.1 },
+        choices: [
+            {
+                text: "Sit down and split a packed meal with him.",
+                requires: { stash: 1 },
+                customAction: () => {
+                    state.flags.metRay = true;
+                    state.flags.streetRep = (state.flags.streetRep || 0) + 1;
+                    applyEffects({ foodStash: -1, mentalFortitude: 5, timePassed: 1 });
+                    loadScenario('ray_met_meal');
+                }
+            },
+            {
+                text: "Stop and talk a while. It costs nothing.",
+                customAction: () => {
+                    state.flags.metRay = true;
+                    state.flags.streetRep = (state.flags.streetRep || 0) + 1;
+                    applyEffects({ mentalFortitude: 5, timePassed: 1 });
+                    loadScenario('ray_met_talk');
+                }
+            },
+            { text: "Nod back and keep moving.", nextScenario: null }
+        ]
+    },
+    {
+        id: 'ray_met_meal',
+        notRandom: true,
+        text: "He halves the sandwich with a pocketknife, exactly, and hands the bigger half back. 'Ray,' he says, like a fact you should file. Twenty-two years out here, most of them within ten blocks of this crate. He eats slowly and asks nothing — not your story, not your plans — and tells you which security guards are human and which corner the wind skips in January. 'You want to know something, ask,' he says when you get up. 'Cheaper than learning it yourself.'",
+        choices: [ { text: "Remember the crate on 4th.", nextScenario: null } ]
+    },
+    {
+        id: 'ray_met_talk',
+        notRandom: true,
+        text: "You lean on the wall and he makes room without being asked. 'Ray,' he says, like a fact you should file. Twenty-two years out here, and he talks the way a mechanic talks about engines — which shelters pad their bed counts, which dumpster gets locked on Tuesdays, where the wind doesn't reach. No sermon in any of it. When you push off the wall he says, 'You want to know something, ask. Cheaper than learning it yourself.'",
+        choices: [ { text: "Remember the crate on 4th.", nextScenario: null } ]
+    },
+    {
+        id: 'ray_grapevine',
+        notRandom: false,
+        category: 'encounter',
+        condition: () => state.flags.metRay && (state.flags.streetRep || 0) >= 1 && state.timeHour >= 8 && state.timeHour <= 20,
+        // Pick from the tips the player hasn't already got; small talk if he's out of news
+        onLoad: () => {
+            const tips = [];
+            if (state.flags.shelterTipDay !== state.day) tips.push('shelter');
+            if (!state.flags.knowsStashSpot) tips.push('stash');
+            if (!state.flags.clinicWalkInTip) tips.push('clinic');
+            state.flags._rayTip = tips.length ? tips[Math.floor(Math.random() * tips.length)] : 'smalltalk';
+        },
+        text: () => {
+            const lead = "Ray waves you over to the crate with two fingers, which from him is a parade. ";
+            switch (state.flags._rayTip) {
+                case 'shelter': return lead + "'Save yourself the walk tonight. Downtown shelter's been turning people away by six all week — county cut their overflow beds and didn't tell anybody. Spend the evening somewhere that counts.'";
+                case 'stash': return lead + "'That lot fence where the day crews tuck their rolls? Every sweep driver knows it too. There's a gap behind the loading-dock fence on Merchant — can't be seen from the road, and the crews don't get out of the truck there. Four years I've used it. Don't crowd it.'";
+                case 'clinic': return lead + "'That clinic on 8th that wants a referral — Thursdays they run a walk-in list. No slip, no questions, they just don't advertise it or the line would eat the block. Tell the desk you're there for the walk-ins.'";
+                default: return lead + "No news today. Instead it's twenty minutes on the hawk that's moved into the overpass girders and what it's doing to the pigeon situation, which Ray relates like a war correspondent. It's the first conversation in weeks that asks nothing of you.";
+            }
+        },
+        effects: { timePassed: 0.1 },
+        choices: [
+            {
+                text: "Worth knowing. Thank him.",
+                customAction: () => {
+                    const tip = state.flags._rayTip;
+                    state.flags._rayTip = null;
+                    if (tip === 'shelter') {
+                        state.flags.shelterTipDay = state.day;
+                        // He's usually right. Usually.
+                        if (Math.random() < 0.75) state.flags.shelterFullDay = state.day;
+                    } else if (tip === 'stash') {
+                        state.flags.knowsStashSpot = true;
+                    } else if (tip === 'clinic') {
+                        state.flags.clinicWalkInTip = true;
+                    }
+                    applyEffects({ mentalFortitude: 3, timePassed: 0.3 });
+                    loadScenario();
+                }
+            }
+        ]
+    },
+    {
+        id: 'ray_buddy',
+        notRandom: false,
+        category: 'encounter',
+        weight: 2,
+        condition: () => state.flags.metRay && (state.flags.streetRep || 0) >= 2 && state.flags.sharedWatchDay !== state.day && state.timeHour >= 16 && state.timeHour <= 21,
+        text: "Ray's cart is already pointed toward the underpass when he falls in step with you. 'Weather's turning and I don't like the foot traffic lately. Two of us, we do the night in shifts — you sleep four, I sleep four, packs stacked in the middle. Nobody walks up on two.' He says it like a logistics problem he's already solved, which it is.",
+        effects: { timePassed: 0.1 },
+        choices: [
+            {
+                text: "Split the night with Ray.",
+                customAction: () => {
+                    state.flags.sharedWatchDay = state.day;
+                    applyEffects({ mentalFortitude: 5, timePassed: 0.3 });
+                    loadScenario('ray_watch_set');
+                }
+            },
+            { text: "Not tonight. You'd rather keep your own counsel.", nextScenario: null }
+        ]
+    },
+    {
+        id: 'ray_watch_set',
+        notRandom: true,
+        text: "You spend the tail of the evening setting up the way Ray likes it: cardboard doubled, packs in the middle, feet toward the wind. He draws the first watch without discussing it. 'Wake you at two,' he says, and starts a quiet inventory of his cart like a man settling in at a front desk.",
+        choices: [ { text: "See to the rest of the evening.", nextScenario: null } ]
+    },
+    {
+        id: 'ray_reciprocity',
+        notRandom: false,
+        category: 'encounter',
+        condition: () => state.flags.metRay && (state.flags.streetRep || 0) >= 1 && state.day >= (state.flags.nextRayNeedDay || 0) && state.timeHour >= 9 && state.timeHour <= 17,
+        onLoad: () => { state.flags.nextRayNeedDay = state.day + 7; },
+        text: "Ray isn't on his crate. He's two blocks down, sitting against the laundromat wall with his coat buttoned wrong, and you hear the cough before you cross the street — deep, wet, tearing at something. The cart is with him but the tarp is half-cinched, which from Ray is like a flag at half mast. 'Don't fuss,' he says, and coughs through it.",
+        effects: { timePassed: 0.1 },
+        choices: [
+            {
+                text: "Walk to the pharmacy and back for him ($8.00).",
+                requires: { cash: 8.00 },
+                customAction: () => {
+                    state.flags.streetRep = (state.flags.streetRep || 0) + 1;
+                    applyEffects({ cash: -8.00, mentalFortitude: 8, timePassed: 2 });
+                    loadScenario('ray_helped');
+                }
+            },
+            {
+                text: "Give him your packed meal and stay while he eats it.",
+                requires: { stash: 1 },
+                customAction: () => {
+                    state.flags.streetRep = (state.flags.streetRep || 0) + 1;
+                    applyEffects({ foodStash: -1, mentalFortitude: 8, timePassed: 1.5 });
+                    loadScenario('ray_helped');
+                }
+            },
+            {
+                text: "Stay a while. It's all you've got to give.",
+                customAction: () => {
+                    state.flags.streetRep = (state.flags.streetRep || 0) + 1;
+                    applyEffects({ mentalFortitude: 5, timePassed: 2 });
+                    loadScenario('ray_helped');
+                }
+            },
+            { text: "You can't stop today.", effects: { mentalFortitude: -8 }, nextScenario: 'ray_walked_past' }
+        ]
+    },
+    {
+        id: 'ray_helped',
+        notRandom: true,
+        text: "Cough syrup, aspirin, water, or just your shoulder against the wall next to his — he takes what you brought without ceremony. 'Square,' he says eventually, which from Ray is a whole paragraph. That's it. That's the transaction. Nothing comes of it, and nothing was supposed to; some things you do because a man sat with you when you were new and the wind was wrong.",
+        choices: [ { text: "Leave him resting easier.", nextScenario: null } ]
+    },
+    {
+        id: 'ray_walked_past',
+        notRandom: true,
+        text: "You keep your eyes forward and your feet moving. He doesn't call after you — that's not his way — and somehow the quiet is worse than being cursed at. The cough follows you longer than the two blocks it should. You had reasons. Everyone who has ever walked past you had reasons too.",
+        choices: [ { text: "Keep walking.", nextScenario: null } ]
+    },
+    {
+        id: 'ray_barter',
+        notRandom: false,
+        category: 'encounter',
+        condition: () => state.flags.metRay && state.timeHour >= 8 && state.timeHour <= 20,
+        text: "Ray's crate doubles as a storefront if you know how to read it. Today's stock, arranged on the tarp: three bus day passes — a church group mails them to the outreach van and Ray always ends up holding extras — some batteries, and a stack of sandwiches in wax paper from the Friday volunteers. Going rate is a packed meal for a pass, or the other way around if you're holding. He doesn't haggle. The prices predate you.",
+        effects: { timePassed: 0.1 },
+        choices: [
+            {
+                text: "Trade a packed meal for a bus day pass.",
+                requires: { stash: 1 },
+                customAction: () => {
+                    state.flags.transitPasses = (state.flags.transitPasses || 0) + 1;
+                    applyEffects({ foodStash: -1, timePassed: 0.3 });
+                    loadScenario('ray_barter_done');
+                }
+            },
+            {
+                text: "Trade a day pass for one of the wax-paper sandwiches.",
+                requires: { flag: 'transitPasses', flagLabel: '(No pass to trade)', stashSpace: true },
+                customAction: () => {
+                    state.flags.transitPasses--;
+                    applyEffects({ foodStash: 1, timePassed: 0.3 });
+                    loadScenario('ray_barter_done');
+                }
+            },
+            { text: "Nothing to trade today. Talk pigeons instead.", effects: { mentalFortitude: 3, timePassed: 0.3 }, nextScenario: null }
+        ]
+    },
+    {
+        id: 'ray_barter_done',
+        notRandom: true,
+        text: "The swap takes thirty seconds and neither of you counts anything twice. No receipt, no thanks beyond a nod — the whole arrangement runs on the fact that you'll both still be here tomorrow, and that out here a reputation for fair dealing is worth more than the goods.",
+        choices: [ { text: "Pocket your end of the deal.", nextScenario: null } ]
+    },
+    {
+        id: 'shelter_full',
+        notRandom: true,
+        text: "The line outside the downtown shelter isn't moving, and at the door a staffer repeats it to each new face: full. Full since six. County cut the overflow beds, try again tomorrow. Ray called it to the hour. The walk over cost you the warm part of the evening, and the night still has to be solved from scratch.",
+        effects: { warmth: -10, mentalFortitude: -8, timePassed: 1 },
+        choices: [ { text: "Figure out where else the night can go.", customAction: () => loadScenario('find_shelter') } ]
+    },
+    {
+        id: 'clinic_walkin',
+        notRandom: true,
+        text: "The receptionist looks at you a beat too long, then pulls a clipboard from under the counter without a word — a handwritten list, half the names already crossed off. An hour later a doctor is listening to your chest, dressing the blisters on your feet, and pressing a sample-cabinet course of antibiotics into your hand. Nobody ever asks for a referral. The whole side door of the system, and it runs on somebody telling somebody.",
+        effects: { health: 40, mentalFortitude: 15, timePassed: 2 },
+        choices: [ { text: "Leave better than you arrived.", nextScenario: null } ]
+    },
+    // Shannon: the median person out here. She has a job, a car she lives in, and
+    // boundaries. She gives no tips, runs no economy, and teaches nothing — most
+    // people aren't a lesson, and the game should have at least one of them.
+    {
+        id: 'shannon_first_meeting',
+        notRandom: false,
+        category: 'encounter',
+        weight: 2,
+        condition: () => !state.flags.metShannon && state.timeHour >= 9 && state.timeHour <= 18,
+        text: "The laundromat on Delancey runs warm and nobody clocks how long you sit. Two machines down, a woman in a grocery-store polo is folding a work uniform to creases you could pass inspection with. Through the glass, a twenty-year-old Corolla is parked where she can watch it, packed the way a car gets packed when it's doing the work of a closet. She catches you noticing the car and doesn't look away or explain. 'Shannon,' she says — the tone of someone closing a topic, not opening one.",
+        effects: { timePassed: 0.1 },
+        choices: [
+            {
+                text: "Talk a while, over the noise of the machines.",
+                customAction: () => {
+                    state.flags.metShannon = true;
+                    state.flags.lastShannonDay = state.day;
+                    state.flags.streetRep = (state.flags.streetRep || 0) + 1;
+                    applyEffects({ mentalFortitude: 4, timePassed: 0.8 });
+                    loadScenario('shannon_met');
+                }
+            },
+            { text: "Nod and keep to the warm end of the bench.", nextScenario: null }
+        ]
+    },
+    {
+        id: 'shannon_met',
+        notRandom: true,
+        text: "Four a.m. stocking shift at the Foodway on Route 9, six years in, the last two of them from the Corolla. She doesn't say how that happened, and she visibly files your not-asking as a point in your favor. The talk stays small on purpose: the dryer that shorts everyone five minutes, her sister's kid, a manager she has outlasted twice. Nothing about your situation, nothing about hers. When her buzzer goes she stands, squares the folded uniform like it's load-bearing, and says, 'Some of us are around.' From her, that's the whole welcome mat.",
+        choices: [ { text: "Let her get to her folding.", nextScenario: null } ]
+    },
+    {
+        id: 'shannon_around',
+        notRandom: false,
+        category: 'encounter',
+        condition: () => state.flags.metShannon && state.flags.lastShannonDay !== state.day && state.timeHour >= 8 && state.timeHour <= 20,
+        // People have days. Roll hers — sometimes company, sometimes headphones,
+        // sometimes she's simply elsewhere, living the parts of her life that
+        // don't happen on this block.
+        onLoad: () => {
+            state.flags.lastShannonDay = state.day;
+            const roll = Math.random();
+            state.flags._shannonMood = roll < 0.55 ? 'talk' : roll < 0.85 ? 'quiet' : 'absent';
+        },
+        text: () => {
+            switch (state.flags._shannonMood) {
+                case 'talk': return "Shannon's on the retaining wall outside the Foodway with a break-room coffee, off shift and for once in no hurry. She slides over to make room without making it a thing. Conversation the way she runs it: the show she's watching one episode a week on the library computers, the new cart-corral policy, her sister's kid's science fair volcano. Nothing about your situation or hers. Twenty minutes of being two people on a wall.";
+                case 'quiet': return "Shannon's at the laundromat with her headphones in, working through a paperback with a pencil behind her ear. She gives you the two-finger wave that means she sees you and that today that's the whole transaction. Fair enough. People are allowed to be at capacity.";
+                default: return "Her usual machines are running but it's a stranger's wash inside them. The counter kid shrugs: schedule change, or her sister came through, or nothing at all. People have lives, and the parts of Shannon's that don't happen on this block aren't yours to audit. The dryers tumble on.";
+            }
+        },
+        effects: { timePassed: 0.1 },
+        choices: [
+            { text: "Stay through the coffee.", hidden: () => state.flags._shannonMood !== 'talk', effects: { mentalFortitude: 4, timePassed: 0.7 }, nextScenario: null },
+            { text: "Wave and keep moving.", hidden: () => state.flags._shannonMood !== 'talk', effects: { timePassed: 0.1 }, nextScenario: null },
+            { text: "Leave her to her book.", hidden: () => state.flags._shannonMood !== 'quiet', effects: { timePassed: 0.1 }, nextScenario: null },
+            { text: "Move along.", hidden: () => state.flags._shannonMood !== 'absent', effects: { timePassed: 0.1 }, nextScenario: null }
+        ]
+    },
+    {
+        id: 'shannon_fifty_cents',
+        notRandom: false,
+        category: 'encounter',
+        condition: () => state.flags.metShannon && state.flags.lastShannonDay !== state.day && state.timeHour >= 9 && state.timeHour <= 18,
+        // The favor runs both directions and nobody keeps books — that's the
+        // entire thesis, priced at fifty cents and a cup of detergent
+        onLoad: () => {
+            state.flags.lastShannonDay = state.day;
+            state.flags._shannonTurn = Math.random() < 0.5 ? 'hers' : 'yours';
+        },
+        text: () => state.flags._shannonTurn === 'hers'
+            ? "Mid-cycle, Shannon's dryer dies wanting two more quarters, and she's turning over a palmful of nickels and pocket lint with her jaw set. Wet work uniform, four a.m. shift, no dryer. It's fifty cents. It's also none of your business."
+            : "Shannon flags you down at the laundromat door and hands you a paper cup half full of detergent, already turning back to her folding. 'Bought the big box,' she says, which is the entire ceremony. The machines are warm, the afternoon is yours to spend, and clean is one of the few things in this city with a working price.",
+        effects: { timePassed: 0.1 },
+        choices: [
+            {
+                text: "Feed her machine two quarters.",
+                hidden: () => state.flags._shannonTurn !== 'hers',
+                requires: { cash: 0.50 },
+                customAction: () => {
+                    state.flags.streetRep = (state.flags.streetRep || 0) + 1;
+                    applyEffects({ cash: -0.50, mentalFortitude: 2, timePassed: 0.1 });
+                    loadScenario('shannon_covered');
+                }
+            },
+            {
+                text: "Fifty cents is fifty cents today. Stay out of it.",
+                hidden: () => state.flags._shannonTurn !== 'hers',
+                effects: { timePassed: 0.1 },
+                nextScenario: 'shannon_not_yours'
+            },
+            {
+                text: "Run your spare layers through a wash while the heat's free.",
+                hidden: () => state.flags._shannonTurn !== 'yours',
+                effects: { hygiene: 6, warmth: 8, mentalFortitude: 2, timePassed: 1.2 },
+                nextScenario: 'shannon_laundry_done'
+            },
+            {
+                text: "Can't spare the hour. Thank her and pocket nothing.",
+                hidden: () => state.flags._shannonTurn !== 'yours',
+                effects: { timePassed: 0.1 },
+                nextScenario: null
+            }
+        ]
+    },
+    {
+        id: 'shannon_covered',
+        notRandom: true,
+        text: "She says thanks the way you'd thank a stranger for holding a door — proportionate, and finished. The drum turns. The uniform dries. Fifty cents' worth of the world staying ordinary, and nobody writes anything down.",
+        choices: [ { text: "Go about your day.", nextScenario: null } ]
+    },
+    {
+        id: 'shannon_not_yours',
+        notRandom: true,
+        text: "The kid at the counter breaks a dollar for her before it becomes a moment. The dryer turns. Not everything is yours to fix, and nothing happened here that needs forgiving.",
+        choices: [ { text: "Go about your day.", nextScenario: null } ]
+    },
+    {
+        id: 'shannon_laundry_done',
+        notRandom: true,
+        text: "An hour of heat and tumble, Shannon's detergent doing its work two machines down from Shannon's headphones. Your spare layers come out warm enough to hold against your chest, smelling like a house you used to live in. She's gone before you finish folding — shift, car, life. No goodbye required. You'll both still be here.",
+        choices: [ { text: "Pack the warm clothes away.", nextScenario: null } ]
+    },
+    // Paul: what the street does to a person when the network never catches him.
+    // Desperate, not predatory — his scams are small, readable in hindsight, and
+    // only ever cost cash and time. The game never hands him your papers.
+    {
+        id: 'paul_first_meeting',
+        notRandom: false,
+        category: 'encounter',
+        weight: 2,
+        condition: () => !state.flags.metPaul && state.timeHour >= 8 && state.timeHour <= 19,
+        onLoad: () => { state.flags.lastPaulDay = state.day; },
+        text: "The man at the transit center doors is maybe thirty-five and moves like sixty, and he's on you before the doors finish closing: sister in Millbrook, job lined up, bus leaves at four, ten dollars short. The story arrives worn smooth, every corner rounded from handling. Under it, something true — the sweat on him has nothing to do with the weather, and his eyes do the arithmetic on your pockets while his mouth does the sister. 'Paul,' he says, hand out, like the name is collateral.",
+        effects: { flags: { metPaul: true }, timePassed: 0.1 },
+        choices: [
+            { text: "Give him the ten.", requires: { cash: 10.00 }, effects: { cash: -10.00, timePassed: 0.1 }, nextScenario: 'paul_took_ten' },
+            { text: "Offer a packed meal instead of cash.", requires: { stash: 1 }, effects: { foodStash: -1, mentalFortitude: 2, timePassed: 0.3 }, nextScenario: 'paul_took_meal' },
+            { text: "Ten you don't have to spare. Keep walking.", effects: { timePassed: 0.1 }, nextScenario: 'paul_refused' }
+        ]
+    },
+    {
+        id: 'paul_took_ten',
+        notRandom: true,
+        text: "He thanks you three times, which is two more than the transaction needed, and the thanks is the realest thing he's said. He heads inside toward the ticket window and you watch him drift past it, easy as water finding a drain, out the far doors toward Frontage Road. There's no bus at four. There maybe isn't a sister. There was definitely a need, and it was exactly ten dollars shaped, and now it's somewhere on Frontage Road with the rest of him.",
+        choices: [ { text: "It's gone. Let it be gone.", nextScenario: null } ]
+    },
+    {
+        id: 'paul_took_meal',
+        notRandom: true,
+        text: "A beat, while he re-runs the script for a scene it doesn't cover. Then he takes the sandwich, eats half of it right there — fast, mechanical, a man refueling rather than dining — and wraps the other half with a care that tells you food wasn't the ten dollars. 'Bus at four,' he says again, quieter, both of you letting it stand. He wishes you luck like he means it. That part isn't in the script either.",
+        choices: [ { text: "Head on your way.", nextScenario: null } ]
+    },
+    {
+        id: 'paul_refused',
+        notRandom: true,
+        text: "'Worth a try,' he says, no heat in it at all, and he's already scanning past your shoulder for the next face coming through the doors. Being told no is a bigger part of his day than being told yes, and he's made a kind of peace with the ratio. You're forgotten before you're out of earshot, which is its own strange mercy.",
+        choices: [ { text: "Keep moving.", nextScenario: null } ]
+    },
+    {
+        id: 'paul_borrow',
+        notRandom: false,
+        category: 'encounter',
+        condition: () => state.flags.metPaul && !state.flags.paulBorrowDone && state.flags.lastPaulDay !== state.day && state.timeHour >= 9 && state.timeHour <= 18,
+        onLoad: () => { state.flags.lastPaulDay = state.day; },
+        text: "Paul falls into step beside you like the sidewalk assigned him there. Today's version is closer to the bone than the sister story: he owes a guy, the guy's patience has a schedule, and twenty dollars now beats what Friday costs without it. 'Friday,' he says. 'I'm good for it Friday.' He believes it, which is the hard part. Somewhere in him there is a Friday where everything comes back — the twenty, the years, the guy he was. He's borrowing against that Friday all over the neighborhood.",
+        effects: { flags: { paulBorrowDone: true }, timePassed: 0.2 },
+        choices: [
+            {
+                text: "Hand him the twenty.",
+                requires: { cash: 20.00 },
+                customAction: () => {
+                    state.flags.paulOwesYou = true;
+                    state.flags.paulBorrowDay = state.day;
+                    applyEffects({ cash: -20.00, timePassed: 0.1 });
+                    loadScenario('paul_lent');
+                }
+            },
+            { text: "Not this time. You need your money to stay yours.", effects: { timePassed: 0.1 }, nextScenario: 'paul_refused' }
+        ]
+    },
+    {
+        id: 'paul_lent',
+        notRandom: true,
+        text: "The bills disappear the way rain disappears into dry ground. He repeats 'Friday' twice, shakes your hand with both of his, and walks off lighter than you've ever seen him. You watch him go and do your own arithmetic — the honest kind, the kind that files the twenty under weather rather than debts. Some money you lend. Some money you release.",
+        choices: [ { text: "Get on with your day.", nextScenario: null } ]
+    },
+    {
+        id: 'paul_no_friday',
+        notRandom: false,
+        category: 'encounter',
+        condition: () => state.flags.metPaul && state.flags.paulOwesYou && state.day >= (state.flags.paulBorrowDay || 0) + 3 && state.timeHour >= 8 && state.timeHour <= 19,
+        onLoad: () => { state.flags.lastPaulDay = state.day; },
+        text: "Paul sees you from half a block out, and you watch the twenty dollars arrive in his face before you've said a word. He doesn't cross the street — give him that — but everything in him wants to. He's rehearsing something as you close the distance, and what he lands on is: 'Next week. I know. Next week for sure.' Friday came and went and neither of you mentions which Friday it was.",
+        effects: { timePassed: 0.1 },
+        choices: [
+            {
+                text: "Tell him it's fine. It stopped being a debt a while ago.",
+                customAction: () => {
+                    state.flags.paulOwesYou = false;
+                    applyEffects({ mentalFortitude: 3, timePassed: 0.2 });
+                    loadScenario('paul_debt_released');
+                }
+            },
+            {
+                text: "Hold him to it. 'Friday, Paul.'",
+                customAction: () => {
+                    state.flags.paulOwesYou = false;
+                    applyEffects({ timePassed: 0.2 });
+                    loadScenario('paul_friday_promise');
+                }
+            }
+        ]
+    },
+    {
+        id: 'paul_debt_released',
+        notRandom: true,
+        text: "Something in his shoulders comes down an inch. He nods too many times, says you're all right — the highest honor he has to confer — and changes the subject to a rumor about the overflow shelter reopening, eager as a man stepping off a ledge onto floor. The twenty is gone, but it stopped costing you anything the moment you reclassified it. He'll owe somebody forever. It doesn't have to be you.",
+        choices: [ { text: "Talk shelters a minute, then move on.", nextScenario: null } ]
+    },
+    {
+        id: 'paul_friday_promise',
+        notRandom: true,
+        text: "'Friday,' he agrees, solemn as a courtroom, and you both stand there inside the word for a second. You'll see him again. There will be no twenty. Holding the marker doesn't make you wrong — it was your money and your Friday too — it just makes you one more line in a ledger he stopped being able to read years ago.",
+        choices: [ { text: "Leave it there.", nextScenario: null } ]
+    },
+    {
+        id: 'paul_spot',
+        notRandom: false,
+        category: 'encounter',
+        condition: () => state.flags.metPaul && !state.flags.paulSpotDone && state.flags.lastPaulDay !== state.day && state.timeHour >= 9 && state.timeHour <= 15,
+        onLoad: () => { state.flags.lastPaulDay = state.day; },
+        text: "The line outside the housing outreach office is forty deep when Paul finds you in it — or finds the line, and you happen to be the face he knows. He's holding a spot near the front, he says, and he's got to go see a guy, ten minutes, and can you stand in it for him because if he loses the spot he loses the intake slot and if he loses the slot — he's already backing away as he says it, and the direction he's backing is Frontage Road, which has never once in its existence been ten minutes from anything.",
+        effects: { flags: { paulSpotDone: true }, timePassed: 0.1 },
+        choices: [
+            { text: "Hold the spot. Ten minutes is ten minutes.", effects: { mentalFortitude: -6, timePassed: 1.75 }, nextScenario: 'paul_spot_burned' },
+            { text: "You can't carry his place and your day both. Decline.", effects: { timePassed: 0.1 }, nextScenario: 'paul_spot_declined' }
+        ]
+    },
+    {
+        id: 'paul_spot_burned',
+        notRandom: true,
+        text: "Ten minutes becomes an hour becomes the intake worker flipping the sign at the door. Paul never comes back. You stood a stranger's ground in a line that couldn't help you, holding a slot for a man who was never coming to fill it, and the afternoon went wherever his ten dollars went. The sting isn't the time, exactly. It's that he knew you'd stand there — that being decent made you the right person to spend.",
+        choices: [ { text: "Walk it off.", nextScenario: null } ]
+    },
+    {
+        id: 'paul_spot_declined',
+        notRandom: true,
+        text: "He takes the no like he took the last one — no heat, already pivoting, asking the woman behind you before you've finished saying it. She says no too. Everybody in this line has exactly one spot's worth of standing in them and nothing to spare, which Paul knows better than anyone. It's why he asks here.",
+        choices: [ { text: "Keep your own place in the day.", nextScenario: null } ]
+    },
+    {
+        id: 'paul_withdrawal',
+        notRandom: false,
+        category: 'encounter',
+        condition: () => state.flags.metPaul && state.day >= (state.flags.nextPaulSickDay || 0) && state.timeHour >= 8 && state.timeHour <= 18,
+        onLoad: () => { state.flags.nextPaulSickDay = state.day + 6; state.flags.lastPaulDay = state.day; },
+        text: "Paul is on the ground behind the transit center, back against the brick, jacket zipped to the chin on a day that doesn't call for it. He's sick the way that keeps a schedule — shaking, gray, sweat standing on his face, arms wrapped around himself like he's holding something in. No script today. No sister, no Friday, no guy. He looks up at you and doesn't ask for anything, which from Paul is the most alarming thing he could possibly do.",
+        effects: { timePassed: 0.1 },
+        choices: [
+            {
+                text: "Get electrolytes and crackers from the corner store ($4.00).",
+                requires: { cash: 4.00 },
+                customAction: () => {
+                    state.flags.streetRep = (state.flags.streetRep || 0) + 1;
+                    applyEffects({ cash: -4.00, mentalFortitude: 6, timePassed: 1 });
+                    loadScenario('paul_sick_stayed');
+                }
+            },
+            {
+                text: "Sit with him a while. Nobody should ride this out alone.",
+                customAction: () => {
+                    state.flags.streetRep = (state.flags.streetRep || 0) + 1;
+                    applyEffects({ mentalFortitude: 4, timePassed: 1.5 });
+                    loadScenario('paul_sick_stayed');
+                }
+            },
+            {
+                text: "Call the outreach line on your phone.",
+                hidden: () => !phoneActive(),
+                customAction: () => {
+                    state.flags.streetRep = (state.flags.streetRep || 0) + 1;
+                    applyEffects({ mentalFortitude: 5, timePassed: 0.75 });
+                    loadScenario('paul_sick_van');
+                }
+            },
+            { text: "You can't be what he needs. Walk on.", effects: { mentalFortitude: -5 }, nextScenario: 'paul_walked_on' }
+        ]
+    },
+    {
+        id: 'paul_sick_stayed',
+        notRandom: true,
+        text: "He gets the drink down in sips, loses the first one, keeps the second. Mostly what you do is be a body next to his body so the people walking past see two people instead of a problem. 'It's not even the being sick,' he says at one point, teeth going. 'It's that it knows exactly when.' That's as close as Paul gets to explaining himself, and closer than anyone's asked him to get in years. Nothing is fixed when you leave. He's still there. But he rode an hour of it with company, and the hour was going to happen either way.",
+        choices: [ { text: "Leave him the rest of the crackers.", nextScenario: null } ]
+    },
+    {
+        id: 'paul_sick_van',
+        notRandom: true,
+        text: "The outreach van takes forty minutes, which for the outreach van is a sprint. Two workers who clearly know Paul by name get him up gently — 'Hey, brother, bad one today?' — and into a seat, and one of them nods at you before they pull out: whoever called, good call. There's a cot and fluids and somebody with a clipboard at the other end of that ride. He'll be back on this block by Thursday. That's not the system failing. That's just the shape of the ride — and today, for once, somebody's phone was the net.",
+        choices: [ { text: "Watch the van go.", nextScenario: null } ]
+    },
+    {
+        id: 'paul_walked_on',
+        notRandom: true,
+        text: "You walk on. There are days you could have sat, and this isn't one, or maybe it is and you'll never know now. Half a block later you're rehearsing the reasons the way Paul rehearses his stories, smoothing the corners so they'll carry. That's the thing nobody tells you about walking past someone: you don't stop doing it when the block ends.",
+        choices: [ { text: "Keep going.", nextScenario: null } ]
+    },
+    {
+        id: 'paul_good_day',
+        notRandom: false,
+        category: 'encounter',
+        condition: () => state.flags.metPaul && state.flags.lastPaulDay !== state.day && state.timeHour >= 9 && state.timeHour <= 19,
+        onLoad: () => { state.flags.lastPaulDay = state.day; },
+        text: "Paul, upright, fed, and steady, is a different animal entirely. He's at the transit center wall doing commentary on the parking enforcement officer working the block — quiet, deadpan, merciless — 'He's going for the Civic. He wants the Civic. Twenty years chasing the Civic that got away' — and when you post up next to him he hands you the next line like you've been doing this act for years. For half an hour he's quick and funny and nobody's mark and nobody's cautionary tale. Somewhere in the middle of it he asks, casual as weather, whether you've seen Ray around — says it like a man checking that something is still where he left it.",
+        effects: { timePassed: 0.1 },
+        choices: [
+            { text: "Stay for the show.", effects: { mentalFortitude: 4, timePassed: 0.5 }, nextScenario: null },
+            { text: "Trade a line and keep moving.", effects: { mentalFortitude: 2, timePassed: 0.1 }, nextScenario: null }
         ]
     },
     // Placeholder transition scenarios
@@ -1292,8 +2104,6 @@ function applyEffects(effects) {
     if (!effects) return;
 
     if (effects.maxWarmthCapacity !== undefined) state.maxWarmthCapacity = Math.max(0, state.maxWarmthCapacity + effects.maxWarmthCapacity);
-    
-    if (effects.timeModifier !== undefined) state.timeModifier = effects.timeModifier;
 
     if (effects.health !== undefined) state.health += effects.health;
     if (effects.mentalFortitude !== undefined) state.mental += effects.mentalFortitude;
@@ -1309,6 +2119,10 @@ function applyEffects(effects) {
             state.flags[key] = value;
         }
     }
+
+    // Recompute now (flags may have just changed, here or in a customAction) so
+    // this action's own timePassed is charged at the current encumbrance
+    recomputeTimeModifier();
 
     // Time advancement and passive drain
     let timePassed = effects.timePassed !== undefined ? effects.timePassed : 1;
@@ -1369,21 +2183,75 @@ function makeChoice(choice) {
     }
 }
 
+// Category-weighted selection: roll a lane first, then a scenario within it.
+// A flat pool lets every new scenario dilute every old one — write three street
+// characters and suddenly the drywall truck never comes. Bucketing means new
+// encounters only compete with other encounters, and "work shows up about a
+// quarter of the time" stays true no matter how much content gets added.
+const CATEGORY_WEIGHTS = { work: 25, food: 20, encounter: 20, quest: 20, hazard: 15 };
+
+function pickRandomScenario() {
+    const buckets = {};
+    scenarios.forEach(s => {
+        if (s.notRandom) return;
+        if (s.condition && !s.condition()) return;
+        const cat = s.category || 'encounter';
+        (buckets[cat] = buckets[cat] || []).push(s);
+    });
+
+    // Empty buckets (quest chain finished, work closed for the night) never
+    // reach the roll — the weights renormalize over whoever's home
+    const cats = Object.keys(buckets);
+    if (cats.length === 0) return null;
+
+    let total = 0;
+    cats.forEach(c => { total += CATEGORY_WEIGHTS[c] || 10; });
+    let roll = Math.random() * total;
+    let chosen = cats[cats.length - 1];
+    for (const c of cats) {
+        roll -= CATEGORY_WEIGHTS[c] || 10;
+        if (roll < 0) { chosen = c; break; }
+    }
+
+    // Scenario weight still applies, but only against neighbors in the same lane
+    const pool = [];
+    buckets[chosen].forEach(s => {
+        const w = s.weight || 1;
+        for (let i = 0; i < w; i++) pool.push(s);
+    });
+    return pool[Math.floor(Math.random() * pool.length)];
+}
+
 function loadScenario(id) {
     // Stop if the game has already ended (death or victory) — renderStats shows the end screen
     if (checkGameStatus() !== "CONTINUE") {
         renderStats();
         return;
     }
-    
+
+    // Checkout morning: the prepaid week ran out with your gear still in the
+    // room — the desk has already turned it over, and this can't wait
+    if (!id && state.flags.gearAtMotel && (state.flags.motelDaysRemaining || 0) <= 0) {
+        id = 'motel_gear_desk';
+    }
+
+    // Dusk: stashed gear has to be dealt with before the shelter prompt — what
+    // the sweep did or didn't take changes what tonight costs. Gear behind a
+    // motel door doesn't need retrieving; the room is where tonight happens.
+    if (!id && state.flags.gearStashed && !state.flags.gearAtMotel && state.timeHour >= 18 && state.flags.lastRetrievalPromptDay !== state.day) {
+        id = 'retrieve_stash';
+    }
+
     // Nightfall: force the shelter decision once per evening
     if (!id && state.timeHour >= 19 && state.flags.lastShelterPromptDay !== state.day) {
         state.flags.lastShelterPromptDay = state.day;
         id = 'find_shelter';
     }
 
-    // Steady work: with boots, the labor office is a guaranteed morning stop, once per day
-    if (!id && state.flags.hasWorkBoots && state.timeHour >= 6 && state.timeHour <= 10 && state.flags.lastLaborDay !== state.day) {
+    // The labor office is a guaranteed morning stop for everyone, once per day —
+    // boots don't gate the stop, they gate which tickets you're allowed to take.
+    // The stash decision lives inside it as a choice, so one stop carries both.
+    if (!id && state.timeHour >= 6 && state.timeHour <= 10 && state.flags.lastLaborDay !== state.day) {
         id = 'labor_office';
     }
 
@@ -1391,14 +2259,7 @@ function loadScenario(id) {
     if (id) {
         scenario = scenarios.find(s => s.id === id);
     } else {
-        const randomPool = [];
-        scenarios.forEach(s => {
-            if (s.notRandom) return;
-            if (s.condition && !s.condition()) return;
-            const weight = s.weight || 1;
-            for (let i = 0; i < weight; i++) randomPool.push(s);
-        });
-        scenario = randomPool[Math.floor(Math.random() * randomPool.length)];
+        scenario = pickRandomScenario();
     }
     
     if (!scenario) {
@@ -1426,6 +2287,10 @@ function loadScenario(id) {
     
     if (scenario.choices) {
         scenario.choices.forEach(choice => {
+            // Unlike requires (which renders a disabled button), hidden choices don't
+            // exist at all until you learn they do — grapevine knowledge stays invisible
+            if (choice.hidden && choice.hidden()) return;
+
             const btn = document.createElement('button');
             btn.className = 'choice-btn';
 
@@ -1490,6 +2355,21 @@ function renderGear() {
     else if (state.flags.backpackBroken) pack = 'Plastic grocery bag';
     items.push(`${pack} — meals: ${state.foodStash}/${carryCapacity()}`);
 
+    // The sleeping bag has four states: on your back, behind a motel door,
+    // under a bush across town, or gone
+    if (!ownsSleepingBag()) {
+        items.push('Sleeping bag (lost)');
+    } else if (state.flags.gearAtMotel) {
+        items.push((state.flags.motelDaysRemaining || 0) > 0
+            ? 'Sleeping bag (locked in your motel room)'
+            : 'Sleeping bag (held at the motel desk)');
+    } else if (state.flags.gearStashed) {
+        const daysOut = state.day - (state.flags.stashDay || state.day);
+        items.push(`Sleeping bag (stashed${daysOut > 0 ? ` — ${daysOut} day${daysOut === 1 ? '' : 's'} out` : ' today'})`);
+    } else {
+        items.push('Sleeping bag (carried)');
+    }
+
     if (state.flags.hasPhone) {
         if (phoneActive()) {
             const daysLeft = (state.flags.phoneExpiryDay || 0) - state.day;
@@ -1500,6 +2380,9 @@ function renderGear() {
     }
     const motelDays = state.flags.motelDaysRemaining || 0;
     if (motelDays > 0) items.push(`Motel residency proof (${motelDays} day${motelDays === 1 ? '' : 's'} remaining)`);
+
+    const passes = state.flags.transitPasses || 0;
+    if (passes > 0) items.push(`Bus day pass${passes === 1 ? '' : `es (×${passes})`}`);
 
     if (state.flags.hasWorkBoots) items.push('Steel-toe work boots');
     else if (state.flags.hasNewShoes) items.push('Decent sneakers');

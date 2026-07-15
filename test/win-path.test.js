@@ -306,12 +306,31 @@ clickChoice('Eat a packed meal');
 Math.random = origRandom;
 assert(state.foodStash === 0 && state.hunger > 60, 'ate from the stash (hunger now ' + Math.floor(state.hunger) + ')');
 
-// --- Boots make the labor office a guaranteed daily stop ---
-state.flags = { hasWorkBoots: true, hasNewShoes: true }; topUp(); state.cash = 0;
+// --- The labor office is a guaranteed morning stop for everyone; boots gate the good tickets ---
+state.flags = {}; topUp(); state.cash = 0;
+state.timeHour = 7;
+loadScenario();
+assert(els['narrative-text'].innerHTML.includes('day labor office'), 'no boots: the labor office is still a guaranteed morning stop');
+const stashAtOffice = els['choices-list'].children.find(b => b.textContent.includes('Stash the sleeping bag'));
+assert(stashAtOffice && !stashAtOffice.disabled, 'the stash decision is offered at the office, before any ticket');
+const bootlessConstruction = els['choices-list'].children.find(b => b.textContent.includes('construction'));
+assert(bootlessConstruction && bootlessConstruction.disabled, 'the construction ticket stays gated on boots');
+const bootlessGeneral = els['choices-list'].children.find(b => b.textContent.includes('general labor'));
+assert(bootlessGeneral && !bootlessGeneral.disabled, 'the lousy-but-reliable general ticket is open to everyone');
+
+// Stashing at the office keeps the board open and discounts the construction toll
+state.flags = { hasWorkBoots: true, hasNewShoes: true, hasPhone: true, phoneExpiryDay: 99 }; topUp(); state.cash = 0;
 state.timeHour = 7;
 loadScenario();
 assert(els['narrative-text'].innerHTML.includes('day labor office'), 'morning forces the labor office when you own boots');
 assert(state.flags.lastLaborDay === state.day, 'labor office visit recorded for today');
+clickChoice('Stash the sleeping bag');
+assert(state.flags.gearStashed === true, 'stashing at the office hides the gear');
+assert(els['narrative-text'].innerHTML.includes('ticket list'), 'the board is still there after stashing');
+clickChoice('construction');
+assert(state.health === 90, 'traveling light halves the construction toll (health now ' + state.health + ')');
+assert(Math.abs(state.cash - 90) < 0.01, 'construction gig paid $90 after the stash');
+state.flags.gearStashed = false; // put the bag back on for the rest of the suite
 let repeatOffice = false;
 for (let i = 0; i < 30; i++) {
     topUp(); state.timeHour = 7;
@@ -536,6 +555,9 @@ assert(state.hunger === 100 && els['narrative-text'].innerHTML.includes('tray'),
 
 // --- Combined actions: eating can piggyback on riding out the elements ---
 state.flags = {}; state.timeModifier = 1.0; topUp(); state.foodStash = 1; state.hunger = 50;
+// Stamp the forced office stop so the zero-time assertion below isn't disturbed
+// by the labor office intercepting the follow-up draw
+state.flags.lastLaborDay = state.day;
 const hourBefore = state.timeHour;
 loadScenario('subway_ride');
 Math.random = () => 0; // pin the follow-up draw to find_meal (no entry effects)
