@@ -180,6 +180,36 @@ clickChoice('your motel room');
 assert(Math.abs(state.cash - 50) < 0.01, 'prepaid motel night costs nothing');
 assert(state.flags.motelDaysRemaining === 4, 'prepaid nights tick down as days advance');
 
+// --- Checkout morning: the desk offers a renewal and a day's gear hold ---
+state.flags.motelDaysRemaining = 1; topUp(); state.timeHour = 20; state.flags.lastShelterPromptDay = 0;
+loadScenario('find_shelter');
+clickChoice('your motel room'); // the last prepaid night
+assert(state.flags.motelDaysRemaining === 0, 'last prepaid night consumed');
+assert(els['choices-list'].innerHTML.includes('six more nights'), 'checkout morning offers a renewal at the desk');
+assert(els['choices-list'].innerHTML.includes('Not enough cash'), 'renewal renders disabled when you cannot cover it');
+assert(els['choices-list'].innerHTML.includes('hold your pack'), 'checkout morning offers to leave the pack at the desk');
+
+// Desk hold: the pack goes behind the counter, forced pickup at dusk, no sweep roll
+leaveGearAtDesk();
+assert(state.flags.gearAtDesk === true && state.flags.gearStashed === true, 'desk hold stages the gear');
+assert(els['gear-list'].innerHTML.includes('held at the motel desk'), 'gear panel shows the desk-held bag');
+state.timeHour = 18; state.flags.lastRetrievalPromptDay = 0;
+loadScenario();
+assert(els['narrative-text'].innerHTML.includes('hauls your pack'), 'dusk forces the desk pickup');
+clickChoice('Shoulder the pack');
+assert(!state.flags.gearAtDesk && !state.flags.gearStashed, 'pack back on your back after the pickup');
+
+// Renewal: nights add on instead of overwriting, and no cash means no-op
+state.cash = 250; state.flags.motelDaysRemaining = 0;
+renewMotelWeek();
+assert(state.flags.motelDaysRemaining === 6, 'renewal books six more nights');
+assert(Math.abs(state.cash - 50) < 0.01, 'renewal cost $200');
+renewMotelWeek();
+assert(state.flags.motelDaysRemaining === 6 && Math.abs(state.cash - 50) < 0.01, 'renewal without the cash is a no-op');
+state.cash = 200; state.flags.motelDaysRemaining = 2;
+renewMotelWeek();
+assert(state.flags.motelDaysRemaining === 8, 'renewing early adds nights instead of overwriting');
+
 // --- Motel residency speeds up ID processing (4 days instead of 10) ---
 state.mode = 'goal'; state.hasID = false;
 state.flags.hasMailingAddress = true; state.flags.hasBirthCert = true;

@@ -29,6 +29,7 @@ let state = {
         stashSpotQuality: 1, // 1 = a spot anyone would check; 2 = one somebody showed you
         stashDay: 0,
         gearAtMotel: false, // gear left in a paid-up motel room — a stash with a lock on it
+        gearAtDesk: false, // checkout-morning favor: the clerk holds your pack until evening
         // Mutual aid: Ray, the grapevine, and a reputation that deliberately never shows in the UI
         metRay: false,
         streetRep: 0,
@@ -374,9 +375,10 @@ function resolveRoom(tier, prepaid) {
 
     // Coming home to gear you left in the room: the stash resolves itself — no
     // sweep roll, no walk across town, just your things where you put them
-    const reunited = state.flags.gearAtMotel && (tier === 'motel' || tier === 'motel_weekly');
+    const reunited = (state.flags.gearAtMotel || state.flags.gearAtDesk) && (tier === 'motel' || tier === 'motel_weekly');
     if (reunited) {
         state.flags.gearAtMotel = false;
+        state.flags.gearAtDesk = false;
         state.flags.gearStashed = false;
         recomputeTimeModifier();
     }
@@ -394,15 +396,56 @@ function resolveRoom(tier, prepaid) {
 
     // If the room is paid through tonight too, the morning offers what a bush
     // never could: leave the heavy gear behind a locked door for the day
-    const roomTonight = (tier === 'motel' || tier === 'motel_weekly') &&
-        (state.flags.motelDaysRemaining || 0) > 0 &&
+    const atMotel = tier === 'motel' || tier === 'motel_weekly';
+    const remaining = state.flags.motelDaysRemaining || 0;
+    const roomTonight = atMotel && remaining > 0 &&
         ownsSleepingBag() && !state.flags.gearStashed;
+    // Checkout morning: before you hand the key back, the desk offers two things
+    // the sidewalk can't — another six nights on the books, or a favor: your
+    // pack behind the counter until evening
+    const checkoutMorning = atMotel && remaining <= 0;
+    const renewCost = roomCost('motel_weekly');
+    const deskHold = checkoutMorning && ownsSleepingBag() && !state.flags.gearStashed;
 
     const choicesContainer = document.getElementById('choices-list');
     choicesContainer.innerHTML = `
         ${roomTonight ? `<button class="choice-btn" onclick="leaveGearAtMotel()">Leave the sleeping bag and heavy gear in the room — it's paid through tonight.</button>` : ''}
+        ${checkoutMorning ? `<button class="choice-btn" onclick="renewMotelWeek()" ${state.cash < renewCost ? 'disabled' : ''}>Stop at the desk and pay for six more nights ($${renewCost.toFixed(2)}).${state.cash < renewCost ? ' (Not enough cash)' : ''}</button>` : ''}
+        ${deskHold ? `<button class="choice-btn" onclick="leaveGearAtDesk()">Ask the desk to hold your pack until evening.</button>` : ''}
         <button class="choice-btn" onclick="loadScenario()">${prepaid ? 'Lock the door behind you and head out' : 'Check out and step outside'}</button>
     `;
+}
+
+// Checkout morning, reconsidered: the weekly rate is available to anyone at the
+// desk with the cash — including someone who woke up here and doesn't want to
+// find out what the sidewalk costs this week. Nights add on, never overwrite.
+function renewMotelWeek() {
+    const cost = roomCost('motel_weekly');
+    if (state.cash < cost) return;
+    state.cash = Math.max(0, state.cash - cost);
+    state.flags.motelDaysRemaining = (state.flags.motelDaysRemaining || 0) + ROOM_TIERS.motel_weekly.nights;
+
+    renderStats();
+    if (checkGameStatus() !== "CONTINUE") return;
+
+    document.getElementById('narrative-text').innerHTML = `<p>You count the bills out before the clerk can ask for the key back. They slide it right back across the counter without ceremony — six more nights on the ledger, same room, same lock. Upstairs, the bed is still unmade the way you left it. It's still yours.</p>`;
+
+    const roomTonight = ownsSleepingBag() && !state.flags.gearStashed;
+    document.getElementById('choices-list').innerHTML = `
+        ${roomTonight ? `<button class="choice-btn" onclick="leaveGearAtMotel()">Leave the sleeping bag and heavy gear in the room — it's paid through tonight.</button>` : ''}
+        <button class="choice-btn" onclick="loadScenario()">Lock the door behind you and head out</button>
+    `;
+}
+
+// No room tonight, but the clerk will keep a pack behind the counter until
+// evening — a stash with a roof, a lock, and no sweep schedule. Good for one
+// day; the dusk pickup is forced from loadScenario like any other stash.
+function leaveGearAtDesk() {
+    state.flags.gearStashed = true;
+    state.flags.gearAtDesk = true;
+    state.flags.stashDay = state.day;
+    recomputeTimeModifier();
+    loadScenario();
 }
 
 // Leaving gear in a paid-up room costs nothing and risks nothing — the whole
@@ -1496,6 +1539,32 @@ const scenarios = [
         ]
     },
     {
+        id: 'desk_gear_pickup',
+        notRandom: true, // forced from loadScenario at dusk while the desk is holding your pack
+        onLoad: () => { state.flags.lastRetrievalPromptDay = state.day; },
+        text: "The lobby smells like burnt coffee and carpet cleaner. The evening clerk sees you come in and hauls your pack up from behind the counter before you ask — still cinched the way you left it, nothing gone through, nothing gone. A whole day it sat there, and the worst that happened to it was fluorescent light.",
+        choices: [
+            {
+                text: "Shoulder the pack and thank them.",
+                customAction: () => {
+                    state.flags.gearAtDesk = false;
+                    state.flags.gearStashed = false;
+                    applyEffects({ mentalFortitude: 2, timePassed: 0.4 });
+                    loadScenario();
+                }
+            },
+            {
+                text: "Take it — and ask what a room runs, since you're standing here.",
+                customAction: () => {
+                    state.flags.gearAtDesk = false;
+                    state.flags.gearStashed = false;
+                    applyEffects({ timePassed: 0.4 });
+                    loadScenario('rent_room');
+                }
+            }
+        ]
+    },
+    {
         id: 'outreach_bedroll',
         notRandom: false,
         category: 'encounter',
@@ -2241,10 +2310,16 @@ function loadScenario(id) {
         id = 'motel_gear_desk';
     }
 
+    // Dusk: the desk favor ends when the day shift does — go collect the pack.
+    // No sweep roll behind a counter; the walk back is the whole cost.
+    if (!id && state.flags.gearAtDesk && state.timeHour >= 18 && state.flags.lastRetrievalPromptDay !== state.day) {
+        id = 'desk_gear_pickup';
+    }
+
     // Dusk: stashed gear has to be dealt with before the shelter prompt — what
     // the sweep did or didn't take changes what tonight costs. Gear behind a
     // motel door doesn't need retrieving; the room is where tonight happens.
-    if (!id && state.flags.gearStashed && !state.flags.gearAtMotel && state.timeHour >= 18 && state.flags.lastRetrievalPromptDay !== state.day) {
+    if (!id && state.flags.gearStashed && !state.flags.gearAtMotel && !state.flags.gearAtDesk && state.timeHour >= 18 && state.flags.lastRetrievalPromptDay !== state.day) {
         id = 'retrieve_stash';
     }
 
@@ -2361,14 +2436,16 @@ function renderGear() {
     else if (state.flags.backpackBroken) pack = 'Plastic grocery bag';
     items.push(`${pack} — meals: ${state.foodStash}/${carryCapacity()}`);
 
-    // The sleeping bag has four states: on your back, behind a motel door,
-    // under a bush across town, or gone
+    // The sleeping bag's states: on your back, behind a motel door, behind the
+    // front desk for the day, under a bush across town, or gone
     if (!ownsSleepingBag()) {
         items.push('Sleeping bag (lost)');
     } else if (state.flags.gearAtMotel) {
         items.push((state.flags.motelDaysRemaining || 0) > 0
             ? 'Sleeping bag (locked in your motel room)'
             : 'Sleeping bag (held at the motel desk)');
+    } else if (state.flags.gearAtDesk) {
+        items.push('Sleeping bag (held at the motel desk)');
     } else if (state.flags.gearStashed) {
         const daysOut = state.day - (state.flags.stashDay || state.day);
         items.push(`Sleeping bag (stashed${daysOut > 0 ? ` — ${daysOut} day${daysOut === 1 ? '' : 's'} out` : ' today'})`);
