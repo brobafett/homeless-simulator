@@ -1,3 +1,7 @@
+// Build version, shown on the title screen (initTitleScreen). Scheme 1.0.x.y:
+// bump x for a gameplay/content feature, y for a fix or tuning pass.
+const GAME_VERSION = '1.0.1.0';
+
 // State
 let state = {
     mode: null,
@@ -2538,6 +2542,7 @@ function endGame(message) {
 
 // Title screen: offer to continue a saved run, if one exists
 (function initTitleScreen() {
+    document.getElementById('version-tag').textContent = 'v' + GAME_VERSION;
     const saved = loadSave();
     if (saved && saved.mode) {
         const modeName = saved.mode === 'goal' ? 'The Way Out' : 'Endure';
