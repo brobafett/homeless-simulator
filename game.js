@@ -1,6 +1,6 @@
 // Build version, shown on the title screen (initTitleScreen). Scheme 1.0.x.y:
 // bump x for a gameplay/content feature, y for a fix or tuning pass.
-const GAME_VERSION = '1.0.1.0';
+const GAME_VERSION = '1.0.2.0';
 
 // State
 let state = {
@@ -40,6 +40,8 @@ let state = {
         knowsStashSpot: false,
         // Shannon: a neighbor, not a mechanic — no tips, no meter, no arc
         metShannon: false,
+        // Seasons: which season turn has been announced (epoch = day / SEASON_LENGTH)
+        seasonNoticedEpoch: 0,
         // Paul: Ray in ten years without the network. His scams only ever cost
         // cash and hours — never papers, never quest progress
         metPaul: false,
@@ -184,6 +186,28 @@ function advanceDay() {
     }
 }
 
+// Seasons: derived entirely from state.day — no new save fields, so old saves
+// just land wherever the calendar says they are. Warmth is the cold-comfort
+// stat, so winter/summer mostly work by scaling the drains that already exist:
+// winter makes the cold the main event, summer trades it for sweat (hygiene)
+// and heat hazards. roughWarmth shifts what a night outside gives back, which
+// flips the shelter economics with the season — winter pushes you indoors,
+// summer makes the underpass almost free.
+const SEASON_LENGTH = 12; // days per season
+const SEASON_ORDER = ['autumn', 'winter', 'spring', 'summer'];
+const SEASONS = {
+    autumn: { label: 'Autumn', warmthDrain: 1.0,  hygieneDrain: 1.0, roughWarmth: 0 },
+    winter: { label: 'Winter', warmthDrain: 1.5,  hygieneDrain: 1.0, roughWarmth: -8 },
+    spring: { label: 'Spring', warmthDrain: 0.75, hygieneDrain: 1.0, roughWarmth: 4 },
+    summer: { label: 'Summer', warmthDrain: 0.25, hygieneDrain: 2.0, roughWarmth: 10 }
+};
+
+// Epoch counts season turns since day 1 (never wraps); the season name cycles.
+function seasonEpoch() { return Math.floor((state.day - 1) / SEASON_LENGTH); }
+function currentSeason() { return SEASON_ORDER[seasonEpoch() % SEASON_ORDER.length]; }
+function seasonConfig() { return SEASONS[currentSeason()]; }
+function seasonDaysLeft() { return SEASON_LENGTH - ((state.day - 1) % SEASON_LENGTH); }
+
 // How much a night's sleep RESTORES, added toward each cap — never a hard reset.
 // The worse the spot, the less you actually recover, so deprivation compounds
 // across days instead of wiping clean every morning. These are the numbers to
@@ -236,6 +260,9 @@ function resolveRough(spot) {
         abandoned: { warmth: 16, risk: 0.40 } // warmer, but more dangerous
     };
     const s = SPOTS[spot] || SPOTS.underpass;
+    // The same spot gives back more or less depending on the season — a winter
+    // underpass barely counts as shelter, a summer one almost does
+    const spotWarmth = s.warmth + seasonConfig().roughWarmth;
 
     // Without the sleeping bag — swept, abandoned, or stashed across town — a
     // rough night stops being rest and starts being endurance
@@ -243,8 +270,8 @@ function resolveRough(spot) {
     // Splitting watches with Ray — capture before applySleep rolls the calendar forward
     const watched = state.flags.sharedWatchDay === state.day;
     applySleep('rough', bagless
-        ? { warmth: s.warmth - 18, healthPenalty: 4, mentalPenalty: 5 }
-        : { warmth: s.warmth });
+        ? { warmth: spotWarmth - 18, healthPenalty: 4, mentalPenalty: 5 }
+        : { warmth: spotWarmth });
 
     let msg;
     if (watched) {
@@ -655,7 +682,8 @@ const scenarios = [
         id: "library_refuge",
         notRandom: false,
         category: 'encounter',
-        condition: () => state.timeHour >= 9 && state.timeHour <= 19,
+        // "Pouring rain, freezing" framing — doesn't fit a heat wave
+        condition: () => state.timeHour >= 9 && state.timeHour <= 19 && currentSeason() !== 'summer',
         text: "It's pouring rain. You step into the public library to get dry and charge your phone. Your backpack is soaked and leaks a small puddle onto the linoleum. Within five minutes, a security guard steps into your line of sight, arms crossed, staring at you.",
         effects: { warmth: 15, mentalFortitude: -5, timePassed: 0.5 },
         choices: [
@@ -769,6 +797,8 @@ const scenarios = [
         id: 'public_transit',
         notRandom: false,
         category: 'encounter',
+        // "You're freezing" — nobody rides the subway to warm up in July
+        condition: () => currentSeason() !== 'summer',
         text: "You're freezing, and the subway station looks incredibly inviting. A heated train ride from one end of the line to the other would take 2 hours.",
         effects: { timePassed: 0.1 },
         choices: [
@@ -1167,6 +1197,48 @@ const scenarios = [
         text: "You huddle in the corner of the ATM lobby. A customer comes in, looks uncomfortable, and quickly leaves. You stay dry, but the anxiety of being kicked out wears on you.",
         effects: { warmth: 10, mentalFortitude: -10, timePassed: 1 },
         choices: [ { text: "Leave when the rain stops.", nextScenario: null } ]
+    },
+    {
+        // Forced (lowest priority) the first time a load happens in a new season.
+        // Costs no time — it's a page turn, not an event.
+        id: 'season_change',
+        notRandom: true,
+        text: () => ({
+            winter: "You wake to a different kind of cold — the kind with a season behind it. Frost on the inside of bus shelters, breath hanging until mid-morning. The street changes in winter: shelter lines form earlier, and everyone sleeping outside starts doing arithmetic about wind and wet. From here on, the cold is the main event.",
+            spring: "Something loosens. The gutters run with meltwater and the mornings stop hurting. Spring out here means rain more than cold — long gray days of it — but the nights stop being dangerous, and that changes what a dollar has to cover.",
+            summer: "The heat arrives like a wall. By ten the pavement is baking and the city smells of hot tar and garbage. Cold stops being the enemy — now it's the sun, the sweat, the long shadeless blocks. Nights outside are almost easy. The days are what you survive.",
+            autumn: "The heat breaks. Mornings come in crisp, and the first genuinely cold night lands like a warning shot. Autumn is the season of getting ready — everyone out here knows what's behind it."
+        })[currentSeason()],
+        effects: { timePassed: 0 },
+        choices: [ { text: "Face the season.", nextScenario: null } ]
+    },
+    {
+        id: 'cold_snap',
+        notRandom: false,
+        category: 'hazard',
+        weight: 2,
+        condition: () => currentSeason() === 'winter' && state.timeHour >= 8 && state.timeHour <= 18,
+        text: "The wind swings out of the north and the temperature falls off a cliff. Within the hour your fingers stop cooperating and the sidewalk crowd thins to nobody. A church two blocks over runs a warming room on days like this.",
+        effects: { warmth: -12, timePassed: 0.3 },
+        choices: [
+            { text: "Sit out the worst of it in the warming room.", effects: { warmth: 45, mentalFortitude: -4, timePassed: 2.5 }, nextScenario: null },
+            { text: "Buy a hot coffee and thaw out standing up ($1.00).", requires: { cash: 1.00 }, effects: { cash: -1.00, warmth: 25, mentalFortitude: 5, timePassed: 0.7 }, nextScenario: null },
+            { text: "Keep moving. You can't afford to lose the hours.", effects: { warmth: -10, health: -5, timePassed: 0.5 }, nextScenario: null }
+        ]
+    },
+    {
+        id: 'heat_wave',
+        notRandom: false,
+        category: 'hazard',
+        weight: 2,
+        condition: () => currentSeason() === 'summer' && state.timeHour >= 10 && state.timeHour <= 18,
+        text: "By midday the sun has turned the street into a griddle. There's no shade on this stretch and your shirt is soaked through. Your head has started doing a slow, warning throb — out here, heat puts people in the hospital faster than cold does.",
+        effects: { health: -4, hygiene: -6, timePassed: 0.3 },
+        choices: [
+            { text: "Ride out the worst hours in the library's air conditioning.", effects: { health: 6, mentalFortitude: 6, timePassed: 2.5 }, nextScenario: null },
+            { text: "Buy a cold bottle of water and find some shade ($2.00).", requires: { cash: 2.00 }, effects: { cash: -2.00, health: 8, timePassed: 0.5 }, nextScenario: null },
+            { text: "Soak your shirt at the park fountain and push on.", effects: { health: 3, hygiene: -6, timePassed: 0.5 }, nextScenario: null }
+        ]
     },
     // The Way Out: quest chain to make Goal Mode winnable (mailing address -> birth certificate -> ID -> clean clothes)
     {
@@ -2208,7 +2280,8 @@ function applyEffects(effects) {
     timePassed *= state.timeModifier;
     
     if (timePassed > 0) {
-        const warmupDrain = 3 * state.difficultyMultiplier;
+        const season = seasonConfig();
+        const warmupDrain = 3 * state.difficultyMultiplier * season.warmthDrain;
         const hungerDrain = 2.5 * state.difficultyMultiplier;
 
         // A recent hot coffee holds the hunger drain at bay, hour for hour
@@ -2218,7 +2291,7 @@ function applyEffects(effects) {
 
         state.warmth -= warmupDrain * timePassed;
         state.hunger -= hungerDrain * hungryHours;
-        state.hygiene -= 1.5 * timePassed;
+        state.hygiene -= 1.5 * season.hygieneDrain * timePassed;
 
         // Being visibly unwashed wears on you
         if (state.hygiene < 25) {
@@ -2338,6 +2411,13 @@ function loadScenario(id) {
     // The stash decision lives inside it as a choice, so one stop carries both.
     if (!id && state.timeHour >= 6 && state.timeHour <= 10 && state.flags.lastLaborDay !== state.day) {
         id = 'labor_office';
+    }
+
+    // Season turn: a one-time notice at the lowest priority — it never preempts
+    // the office, the stash, or the night, and costs no time when it fires
+    if (!id && (state.flags.seasonNoticedEpoch || 0) !== seasonEpoch()) {
+        state.flags.seasonNoticedEpoch = seasonEpoch();
+        id = 'season_change';
     }
 
     let scenario;
@@ -2496,6 +2576,13 @@ function renderStats() {
     
     document.getElementById('stat-cash').textContent = `$${state.cash.toFixed(2)}`;
     document.getElementById('stat-time').textContent = formatTime(state.timeHour);
+
+    // Season card: count down the last days before a turn so winter never
+    // arrives unannounced; the card runs warning-red all winter long
+    const daysLeft = seasonDaysLeft();
+    updateElement('stat-season',
+        seasonConfig().label + (daysLeft <= 3 ? ` (${daysLeft}d)` : ''),
+        currentSeason() === 'winter');
     
     // Update goal mode UI
     if (state.mode === 'goal') {
