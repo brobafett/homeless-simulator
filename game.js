@@ -1,6 +1,6 @@
 // Build version, shown on the title screen (initTitleScreen). Scheme 1.0.x.y:
 // bump x for a gameplay/content feature, y for a fix or tuning pass.
-const GAME_VERSION = '1.0.2.0';
+const GAME_VERSION = '1.0.8.0';
 
 // State
 let state = {
@@ -395,7 +395,9 @@ function roomCost(tier) {
 function resolveRoom(tier, prepaid) {
     const room = ROOM_TIERS[tier];
     if (!prepaid) state.cash = Math.max(0, state.cash - roomCost(tier));
-    if (room.nights) state.flags.motelDaysRemaining = room.nights;
+    // Nights stack on whatever's already on the ledger (same rule as
+    // renewMotelWeek) — buying mid-week must never eat paid nights
+    if (room.nights) state.flags.motelDaysRemaining = (state.flags.motelDaysRemaining || 0) + room.nights;
 
     // Flophouse: open bunks and no locks — some nights the wrong person notices you
     if (room.robberyChance && Math.random() < room.robberyChance && state.cash > 0) {
@@ -502,6 +504,14 @@ const LABOR_TICKETS = [
             applyEffects({ cash: 90.00, health: state.flags.gearStashed ? -10 : -20, hunger: -40, warmth: 10, mentalFortitude: 10, timePassed: 6 });
             loadScenario('labor_done_construction');
         }
+    },
+    {
+        // Boots shouldn't be a lottery ticket: the office is a guaranteed daily
+        // stop, so it always offers the walk to the store that sells them
+        text: "Walk two blocks to the discount shoe outlet the dispatcher mentioned (20 min).",
+        hidden: () => state.flags.hasWorkBoots,
+        effects: { timePassed: 0.3 },
+        nextScenario: 'shoe_store'
     },
     { text: "Leave. You're in no shape to work today.", nextScenario: null }
 ];
@@ -2490,14 +2500,34 @@ function loadScenario(id) {
     }
 }
 
-function formatTime(hour) {
+function formatClock(hour) {
     const ampm = hour >= 12 ? 'PM' : 'AM';
     const displayHour = Math.floor(hour % 12) || 12; // handle decimals from modifiers
     // format minutes if fractional hour
     let mins = Math.floor((hour % 1) * 60);
     let minStr = mins < 10 ? `0${mins}` : `${mins}`;
-    if (minStr === "00") minStr = "00";
-    return `${displayHour}:${minStr} ${ampm} (Day ${state.day})`;
+    return `${displayHour}:${minStr} ${ampm}`;
+}
+
+function formatTime(hour) {
+    return `${formatClock(hour)} (Day ${state.day})`;
+}
+
+// The mobile sticky strip's compact vitals; a no-op cosmetically on desktop
+// where CSS hides the strip. Danger thresholds mirror the dashboard's.
+function renderVitalsStrip() {
+    updateElement('strip-health', `${Math.floor(state.health)}%`, state.health <= 30);
+    updateElement('strip-warmth', `${Math.floor(state.warmth)}%`, state.warmth <= 30);
+    updateElement('strip-hunger', state.hunger <= 0 ? 'Starving' : `${Math.floor(state.hunger)}%`, state.hunger <= 30);
+    updateElement('strip-cash', `$${state.cash.toFixed(2)}`);
+    updateElement('strip-time', `D${state.day} · ${formatClock(state.timeHour)}`);
+}
+
+// Mobile Stats drawer toggle (strip button's inline onclick in index.html)
+function toggleDashboard() {
+    const open = document.body.classList.toggle('dash-open');
+    const btn = document.getElementById('dash-toggle');
+    if (btn) btn.textContent = open ? 'Stats ▴' : 'Stats ▾';
 }
 
 function updateElement(id, value, isDanger = false) {
@@ -2567,12 +2597,50 @@ function renderGear() {
     list.innerHTML = items.map(i => `<li>${i}</li>`).join('');
 }
 
+// Meter fill under a vital stat card. Width is the value (clamped — warmth can
+// exceed 100), color steps at the same 30/60 marks the text danger state uses.
+function renderBar(id, value) {
+    const bar = document.getElementById(id);
+    if (!bar) return;
+    bar.style.width = `${Math.max(0, Math.min(100, value))}%`;
+    bar.classList.remove('mid');
+    bar.classList.remove('low');
+    if (value <= 30) bar.classList.add('low');
+    else if (value <= 60) bar.classList.add('mid');
+}
+
+// Season tint + night vignette, via classes on <body> that style.css keys off.
+// The test stub's document has no body — bail quietly there.
+function renderAtmosphere() {
+    const body = document.body;
+    if (!body || !body.classList) return;
+    SEASON_ORDER.forEach(s => body.classList.remove(`season-${s}`));
+    body.classList.add(`season-${currentSeason()}`);
+    if (state.timeHour >= 19 || state.timeHour < 6) {
+        body.classList.add('time-night');
+    } else {
+        body.classList.remove('time-night');
+    }
+}
+
 function renderStats() {
+    renderAtmosphere();
+    renderVitalsStrip();
     updateElement('stat-health', `${Math.floor(state.health)}%`, state.health <= 30);
     updateElement('stat-mental', `${Math.floor(state.mental)}%`, state.mental <= 30);
     updateElement('stat-warmth', `${Math.floor(state.warmth)}%`, state.warmth <= 30);
     updateElement('stat-hunger', state.hunger <= 0 ? 'Starving' : `${Math.floor(state.hunger)}%`, state.hunger <= 30);
     updateElement('stat-hygiene', `${Math.floor(state.hygiene)}%`, state.hygiene <= 30);
+
+    renderBar('bar-health', state.health);
+    renderBar('bar-mental', state.mental);
+    renderBar('bar-warmth', state.warmth);
+    renderBar('bar-hunger', state.hunger);
+    renderBar('bar-hygiene', state.hygiene);
+    // Warmth capacity lost to gear (cap below 100) shows as a hatched dead zone
+    // at the bar's right end
+    document.getElementById('bar-warmth-lost').style.width =
+        `${Math.max(0, 100 - state.maxWarmthCapacity)}%`;
     
     document.getElementById('stat-cash').textContent = `$${state.cash.toFixed(2)}`;
     document.getElementById('stat-time').textContent = formatTime(state.timeHour);
@@ -2586,9 +2654,16 @@ function renderStats() {
     
     // Update goal mode UI
     if (state.mode === 'goal') {
-        document.getElementById('check-cash').textContent = state.cash >= 1200 ? '[x]' : '[ ]';
-        document.getElementById('check-id').textContent = state.hasID ? '[x]' : '[ ]';
-        document.getElementById('check-clothes').textContent = state.hasCleanClothes ? '[x]' : '[ ]';
+        document.getElementById('check-cash').textContent = state.cash >= 1200
+            ? '[x] Save $1200'
+            : `[$${Math.floor(state.cash)} / $1200] saved`;
+        document.getElementById('check-id').textContent = state.hasID
+            ? '[x] Obtain state-issued ID'
+            : state.flags.idOrdered
+                ? `[~] State ID in the mail (day ${state.flags.idArrivesDay})`
+                : '[ ] Obtain state-issued ID';
+        document.getElementById('check-clothes').textContent =
+            (state.hasCleanClothes ? '[x]' : '[ ]') + ' Secure clean clothes';
     }
     
     // Update endless mode UI
@@ -2626,6 +2701,20 @@ function endGame(message) {
 }
 
 // Initial game state is paused until startGame is called.
+
+// Number keys 1–9 fire the matching choice. Disabled (requirement-gated)
+// buttons never fire; modifier chords and held-key repeats are ignored.
+// The test stub's document has no addEventListener — skip there.
+if (typeof document.addEventListener === 'function') {
+    document.addEventListener('keydown', (e) => {
+        if (e.ctrlKey || e.altKey || e.metaKey || e.repeat) return;
+        if (!state.mode) return; // title screen
+        const n = parseInt(e.key, 10);
+        if (!n) return; // only '1'-'9'
+        const btn = document.querySelectorAll('#choices-list .choice-btn')[n - 1];
+        if (btn && !btn.disabled) btn.click();
+    });
+}
 
 // Title screen: offer to continue a saved run, if one exists
 (function initTitleScreen() {

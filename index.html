@@ -30,28 +30,44 @@
     </div>
 
     <div class="app-container" id="game-screen" style="display: none;">
+        <!-- Mobile-only sticky vitals summary; duplicates dashboard values, so
+             hidden from screen readers. The full dashboard sits behind the
+             Stats toggle on small screens. -->
+        <div class="vitals-strip" aria-hidden="true">
+            <span class="strip-item">HP <span class="strip-value" id="strip-health">100%</span></span>
+            <span class="strip-item">Warm <span class="strip-value" id="strip-warmth">100%</span></span>
+            <span class="strip-item">Food <span class="strip-value" id="strip-hunger">100%</span></span>
+            <span class="strip-item"><span class="strip-value" id="strip-cash">$0.00</span></span>
+            <span class="strip-item"><span class="strip-value" id="strip-time">D1 · 8:00 AM</span></span>
+            <button class="strip-toggle" id="dash-toggle" onclick="toggleDashboard()">Stats ▾</button>
+        </div>
         <aside class="dashboard">
             <h2>Status</h2>
             <div class="stat-grid">
                 <div class="stat-card">
                     <span class="stat-label">Health</span>
                     <span class="stat-value" id="stat-health">100%</span>
+                    <div class="stat-bar" aria-hidden="true"><div class="stat-bar-fill" id="bar-health"></div></div>
                 </div>
                 <div class="stat-card">
                     <span class="stat-label">Mental</span>
                     <span class="stat-value" id="stat-mental">100%</span>
+                    <div class="stat-bar" aria-hidden="true"><div class="stat-bar-fill" id="bar-mental"></div></div>
                 </div>
                 <div class="stat-card">
                     <span class="stat-label">Warmth</span>
                     <span class="stat-value" id="stat-warmth">100%</span>
+                    <div class="stat-bar" aria-hidden="true"><div class="stat-bar-fill" id="bar-warmth"></div><div class="stat-bar-lost" id="bar-warmth-lost"></div></div>
                 </div>
                 <div class="stat-card">
                     <span class="stat-label">Hunger</span>
                     <span class="stat-value" id="stat-hunger">100%</span>
+                    <div class="stat-bar" aria-hidden="true"><div class="stat-bar-fill" id="bar-hunger"></div></div>
                 </div>
                 <div class="stat-card">
                     <span class="stat-label">Hygiene</span>
                     <span class="stat-value" id="stat-hygiene">100%</span>
+                    <div class="stat-bar" aria-hidden="true"><div class="stat-bar-fill" id="bar-hygiene"></div></div>
                 </div>
                 <div class="stat-card">
                     <span class="stat-label">Cash</span>
@@ -70,9 +86,9 @@
             <div id="housing-checklist" style="display: none;">
                 <h3>Housing Requirements</h3>
                 <ul class="checklist">
-                    <li><span id="check-cash">[ ]</span> Save $1200</li>
-                    <li><span id="check-id">[ ]</span> Obtain state-issued ID</li>
-                    <li><span id="check-clothes">[ ]</span> Secure clean clothes</li>
+                    <li id="check-cash">[ ] Save $1200</li>
+                    <li id="check-id">[ ] Obtain state-issued ID</li>
+                    <li id="check-clothes">[ ] Secure clean clothes</li>
                 </ul>
             </div>
             
@@ -88,7 +104,7 @@
         </aside>
         
         <main class="game-area">
-            <div class="narrative-box" id="narrative-text">
+            <div class="narrative-box" id="narrative-text" aria-live="polite">
                 <p>Welcome to the simulator. It's a cold morning. You need to find a way to survive the day.</p>
             </div>
             
