@@ -1,6 +1,6 @@
 // Build version, shown on the title screen (initTitleScreen). Scheme 1.0.x.y:
 // bump x for a gameplay/content feature, y for a fix or tuning pass.
-const GAME_VERSION = '1.0.8.0';
+const GAME_VERSION = '1.0.9.0';
 
 // State
 let state = {
@@ -636,10 +636,14 @@ const scenarios = [
             } else {
                 phoneLine = "Your prepaid phone has been dead for days — no minutes, no callbacks. A $10 top-up card would put five days of service back on it.";
             }
-            return "Fluorescent lights, burnt coffee, a clerk who watches you without quite staring. " + phoneLine;
+            return "Fluorescent lights, burnt coffee, a clerk who watches you without quite staring. The middle aisle is the food aisle: plastic-wrapped sandwiches in a cold case, instant noodles, candy bars, and shrink-wrapped ready meals that keep forever. Everything costs a dollar more than it should — that's the corner store tax. " + phoneLine;
         },
         effects: { warmth: 5, timePassed: 0.1 },
         choices: [
+            { text: "Grab a candy bar off the rack ($2.00).", requires: { cash: 2.00 }, effects: { cash: -2.00, hunger: 12, mentalFortitude: 3, timePassed: 0.1 } },
+            { text: "Pour a coffee from the self-serve machine ($2.00).", requires: { cash: 2.00 }, effects: { cash: -2.00, warmth: 20, mentalFortitude: 8, hunger: 5, timePassed: 0.1 } },
+            { text: "Eat a cold-case sandwich at the window counter ($5.00).", requires: { cash: 5.00 }, effects: { cash: -5.00, hunger: 30, mentalFortitude: 5, warmth: 5, timePassed: 0.3 } },
+            { text: "Buy a packaged meal to pack for later ($6.00).", requires: { cash: 6.00, stashSpace: true }, effects: { cash: -6.00, foodStash: 1, timePassed: 0.2 } },
             {
                 text: "Buy a prepaid phone ($20.00).",
                 requires: { cash: 20.00, notFlag: 'hasPhone', notFlagLabel: '(You already own a phone)' },
@@ -1547,6 +1551,7 @@ const scenarios = [
         text: () => "Four hours of hauling couches and boxes up apartment stairs. Your back aches, but the dispatcher counts two twenties into your palm. Honest money." + walkHomeStoreLine(),
         choices: [
             { text: "Stop by the convenience store on the walk back.", effects: { timePassed: 0.2 }, nextScenario: 'convenience_store' },
+            { text: "Sit on the loading dock and eat a packed meal from your bag.", requires: { stash: 1 }, effects: { foodStash: -1, hunger: 35, mentalFortitude: 8, timePassed: 0.3 } },
             { text: "Pocket the cash and stretch your back.", nextScenario: null }
         ]
     },
@@ -1556,6 +1561,7 @@ const scenarios = [
         text: () => "Six hours on the site — hauling block, clearing debris, staying out of the crane's way. The foreman nods at your boots and says there's usually work for people who show up. $90, cash." + walkHomeStoreLine(),
         choices: [
             { text: "Stop by the convenience store on the walk back.", effects: { timePassed: 0.2 }, nextScenario: 'convenience_store' },
+            { text: "Sit against the site fence and eat a packed meal from your bag.", requires: { stash: 1 }, effects: { foodStash: -1, hunger: 35, mentalFortitude: 8, timePassed: 0.3 } },
             { text: "Head out, exhausted but flush.", nextScenario: null }
         ]
     },
