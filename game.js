@@ -1,6 +1,6 @@
 // Build version, shown on the title screen (initTitleScreen). Scheme 1.0.x.y:
 // bump x for a gameplay/content feature, y for a fix or tuning pass.
-const GAME_VERSION = '1.0.10.0';
+const GAME_VERSION = '1.0.11.0';
 
 // State
 let state = {
@@ -225,6 +225,8 @@ const SLEEP_QUALITY = {
 // opts: { healthPenalty, mentalPenalty, warmth } — warmth overrides rough warmth per spot.
 function applySleep(tier, opts = {}) {
     const q = SLEEP_QUALITY[tier] || SLEEP_QUALITY.rough;
+    // Where you woke up this morning is part of Pamela's intake read
+    state.flags.lastNightTier = tier;
 
     if (state.timeHour < 8) {
         state.timeHour = 8;
@@ -1324,6 +1326,18 @@ const scenarios = [
                 effects: { timePassed: 0.1 },
                 nextScenario: 'order_birth_cert'
             },
+            {
+                text: "Introduce yourself at the caseworker's table inside Hopewell.",
+                hidden: () => !(state.mode === 'goal' && state.flags.hasMailingAddress && !state.flags.metPamela && state.timeHour >= 9 && state.timeHour <= 16),
+                effects: { timePassed: 0.1 },
+                nextScenario: 'meet_pamela'
+            },
+            {
+                text: "Check in with Pamela at her table.",
+                hidden: () => !(state.mode === 'goal' && state.flags.metPamela && state.timeHour >= 9 && state.timeHour <= 16),
+                effects: { timePassed: 0.1 },
+                nextScenario: 'pamela_checkin'
+            },
             { text: "Sit a while in the periodicals section, out of the weather.", effects: { warmth: 12, mentalFortitude: 5, timePassed: 1 }, nextScenario: 'hopewell_block' },
             { text: "Eat something from your bag at a corner table, head down.", requires: { stash: 1 }, effects: { foodStash: -1, hunger: 35, mentalFortitude: 5, timePassed: 0.3 }, nextScenario: 'hopewell_block' },
             { text: "Head back out.", nextScenario: null }
@@ -1345,6 +1359,70 @@ const scenarios = [
         choices: [
             { text: "Cross back to the library.", nextScenario: 'hopewell_block' },
             { text: "Head out.", nextScenario: null }
+        ]
+    },
+    {
+        // Pamela: casework with a memory. The checklist she runs — room, phone,
+        // clothes, ID — is the doorway the full-time job feature opens through
+        // (flags.jobSearchUnlocked); until that ships, her calls stay "in progress"
+        id: 'meet_pamela',
+        notRandom: false,
+        category: 'quest',
+        weight: 3,
+        condition: () => state.mode === 'goal' && state.flags.hasMailingAddress && !state.flags.metPamela && state.timeHour >= 9 && state.timeHour <= 16,
+        text: "The volunteer at Hopewell nods you toward the back of the room, where an older woman with silver hair and reading glasses on a chain holds down a card table stacked with intake folders. 'Pamela. Casework — such as it is.' She looks at you the way nobody at a service window ever has: straight on, unhurried. 'I did three years outside myself, most of it within ten blocks of this table. So skip the version you tell the intake forms. Tell me where you're actually at.'",
+        effects: { warmth: 5, timePassed: 0.2, flags: { metPamela: true } },
+        choices: [
+            { text: "Pull up the folding chair and lay it out.", nextScenario: 'pamela_checkin' },
+            { text: "Take her card and keep moving.", effects: { timePassed: 0.1 }, nextScenario: null }
+        ]
+    },
+    {
+        id: 'pamela_checkin',
+        notRandom: true,
+        text: () => {
+            const stable = (state.flags.motelDaysRemaining || 0) > 0;
+            const opener = "Pamela pours two coffees without asking and listens with her glasses pushed up into her hair, which you've learned means she's actually listening. ";
+            if (state.flags.jobSearchUnlocked) {
+                return opener + "'Still working my phone,' she says before you can ask. 'Twenty years of favors in that thing and I'm calling every one of them in. Your job right now is simpler than mine: keep the room paid, keep the phone lit, stay clean. Don't make a liar out of me before somebody calls back.'";
+            }
+            if (!stable) {
+                if ((state.flags.lastNightTier || 'rough') === 'rough') {
+                    return opener + "'Where'd you sleep?' You tell her the truth. She doesn't flinch — three years outside, she's slept worse — but she taps the table twice, like a judge. 'Nights outside are a tax on everything else you do. You can't interview at eight a.m. off concrete. The weekly rate at the motel is the only math in this city that runs in your favor: six nights, one price, a door that locks. Steady starts with an address.'";
+                }
+                return opener + "'A bunk is a bed, not a base,' she says when you tell her where you've been sleeping. 'Nobody gets hired out of a bunk line — you can't hold a schedule when your nights start with a lottery. The motel's weekly rate buys six nights, a door, and a shower every morning. From the other side of an interview desk, that's what reliable looks like.'";
+            }
+            const missing = [];
+            if (!phoneActive()) missing.push("a phone that rings — 'nobody hires a person they can't call back'");
+            if (!state.hasCleanClothes) missing.push("one clean, pressed outfit — 'the church closet on 9th, or fifteen dollars at the thrift store'");
+            if (!state.hasID) missing.push("a state ID — 'no card, no payroll; it's that cold'");
+            if (missing.length) {
+                return opener + "'The room is the hard part, and you've done it,' she says, then counts what's left on her fingers: " + missing.join('; ') + ". 'Bring me all of it and I start making calls. Real calls. Full-time calls.'";
+            }
+            return opener + "She looks you over slowly — room key, working phone, clean shirt, and the state ID you slide across the table — and nods, like a column of figures that finally adds up. 'Well,' she says. 'Look at you. Hireable.'";
+        },
+        effects: { mentalFortitude: 5, warmth: 5, timePassed: 0.5 },
+        choices: [
+            {
+                text: "Tell her you're ready for steady work.",
+                hidden: () => !((state.flags.motelDaysRemaining || 0) > 0 && phoneActive() && state.hasCleanClothes && state.hasID && !state.flags.jobSearchUnlocked),
+                customAction: () => {
+                    state.flags.jobSearchUnlocked = true;
+                    applyEffects({ mentalFortitude: 10, timePassed: 0.3 });
+                    loadScenario('pamela_job_lead');
+                }
+            },
+            { text: "Take the advice and step back out to the corner.", effects: { timePassed: 0.1 }, nextScenario: 'hopewell_block' },
+            { text: "Head off down Sycamore.", nextScenario: null }
+        ]
+    },
+    {
+        id: 'pamela_job_lead',
+        notRandom: true,
+        text: "Pamela takes her glasses off entirely, which you've learned means business. 'Room. Phone. Clothes. Card. You did the four hardest errands in this city back to back, and most people will never know how hard.' She pulls the phone across the table. 'I know floor managers, kitchen managers, a warehouse foreman who owes me from before he was a foreman. Full-time. Real wages. A schedule you can build a life on.' She's dialing before you're out of the chair. 'Give me a day or two, then check back at this table.'",
+        choices: [
+            { text: "Step back out to the corner.", effects: { timePassed: 0.1 }, nextScenario: 'hopewell_block' },
+            { text: "Head out. For once, the waiting feels different.", nextScenario: null }
         ]
     },
     {
