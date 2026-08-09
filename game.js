@@ -1,6 +1,11 @@
 // Build version, shown on the title screen (initTitleScreen). Scheme 1.0.x.y:
 // bump x for a gameplay/content feature, y for a fix or tuning pass.
-const GAME_VERSION = '1.0.11.0';
+const GAME_VERSION = '1.0.12.0';
+
+// Winning means signing a lease: first month, deposit, and the application
+// fees nobody warns you about. Referenced by checkGameStatus and the sidebar
+// checklist; the title-screen copy in index.html states the same number.
+const WIN_CASH_GOAL = 2400;
 
 // State
 let state = {
@@ -170,7 +175,7 @@ function checkGameStatus() {
 
     // 2. Check for Win (Only in Goal Mode)
     if (state.mode === "goal") {
-        if (state.cash >= 1200 && state.hasID && state.hasCleanClothes) {
+        if (state.cash >= WIN_CASH_GOAL && state.hasID && state.hasCleanClothes) {
             return "VICTORY: You secured a lease on a small apartment. You broke the cycle.";
         }
     }
@@ -1383,7 +1388,13 @@ const scenarios = [
         text: () => {
             const stable = (state.flags.motelDaysRemaining || 0) > 0;
             const opener = "Pamela pours two coffees without asking and listens with her glasses pushed up into her hair, which you've learned means she's actually listening. ";
+            if (state.flags.hasJob) {
+                return opener + "'Duane says you show up.' From Pamela, that's a parade float. 'Keep showing up. The math does the rest — twenty-four hundred signs a lease in this city: first month, deposit, and the application fees nobody warns you about. You're not surviving anymore. You're saving.'";
+            }
             if (state.flags.jobSearchUnlocked) {
+                if (state.day >= (state.flags.jobSearchDay || 0) + 2) {
+                    return opener + "This time she's the one leaning forward. 'Somebody called back.' She taps a torn envelope corner with an address inked on it. 'Don't sit there drinking my coffee. Ask.'";
+                }
                 return opener + "'Still working my phone,' she says before you can ask. 'Twenty years of favors in that thing and I'm calling every one of them in. Your job right now is simpler than mine: keep the room paid, keep the phone lit, stay clean. Don't make a liar out of me before somebody calls back.'";
             }
             if (!stable) {
@@ -1408,9 +1419,16 @@ const scenarios = [
                 hidden: () => !((state.flags.motelDaysRemaining || 0) > 0 && phoneActive() && state.hasCleanClothes && state.hasID && !state.flags.jobSearchUnlocked),
                 customAction: () => {
                     state.flags.jobSearchUnlocked = true;
+                    state.flags.jobSearchDay = state.day;
                     applyEffects({ mentalFortitude: 10, timePassed: 0.3 });
                     loadScenario('pamela_job_lead');
                 }
+            },
+            {
+                text: "Ask who called back.",
+                hidden: () => !(state.flags.jobSearchUnlocked && !state.flags.hasJob && state.day >= (state.flags.jobSearchDay || 0) + 2),
+                effects: { timePassed: 0.1 },
+                nextScenario: 'pamela_callback'
             },
             { text: "Take the advice and step back out to the corner.", effects: { timePassed: 0.1 }, nextScenario: 'hopewell_block' },
             { text: "Head off down Sycamore.", nextScenario: null }
@@ -1424,6 +1442,112 @@ const scenarios = [
             { text: "Step back out to the corner.", effects: { timePassed: 0.1 }, nextScenario: 'hopewell_block' },
             { text: "Head out. For once, the waiting feels different.", nextScenario: null }
         ]
+    },
+    {
+        id: 'pamela_callback',
+        notRandom: true,
+        text: () => {
+            let t = "Pamela doesn't bother with the coffee this time. 'Merchant Street Distribution — the warehouse with the blue roll-up doors past the rail spur. Foreman's name is Duane. I knew him when his office was a milk crate on 8th. Full-time, sixteen an hour, six a.m. shifts. He's expecting you.'";
+            if (state.flags.firedFromWarehouse) {
+                t += " She holds your eye a second longer than usual. 'He'll take you back on my word. Nobody gets a third — from him or from me.'";
+            }
+            return t;
+        },
+        choices: [
+            {
+                text: "Walk to Merchant Street while the gate's open (30 min).",
+                hidden: () => state.timeHour >= 16,
+                effects: { timePassed: 0.5 },
+                nextScenario: 'warehouse_interview'
+            },
+            { text: "Tomorrow morning. You want to walk in rested.", nextScenario: null }
+        ]
+    },
+    {
+        id: 'warehouse_interview',
+        notRandom: true,
+        text: "The gate hut smells of diesel and burnt coffee. Duane turns out to be a broad, gray man with a clipboard and no interest in small talk. He looks at your ID, your clean shirt, the phone number you print on the line he points to. Four minutes, start to finish. 'Pamela says you're steady. That buys you the interview, not the job. Sixteen an hour, eight-hour shifts, gate at six sharp. Miss two shifts and don't come back — I owe her, I don't owe you.'",
+        effects: { timePassed: 0.3 },
+        choices: [
+            { text: "Take it. Six a.m.", effects: { mentalFortitude: 20, timePassed: 0.5, flags: { hasJob: true, missedShifts: 0 } }, nextScenario: 'warehouse_hired' },
+            { text: "Ask for a day to think it over.", nextScenario: null }
+        ]
+    },
+    {
+        id: 'warehouse_hired',
+        notRandom: true,
+        text: "A clipboard, two forms, a locker number chalked on a tag. You walk out of the gate hut with something you haven't had in a long time: a start time. Not a ticket, not a day's cash — a schedule. On the walk back, the city looks exactly the same and entirely different.",
+        choices: [
+            { text: "Stop by the convenience store on the walk back.", effects: { timePassed: 0.2 }, nextScenario: 'convenience_store' },
+            { text: "Head off. Six a.m. comes early.", nextScenario: null }
+        ]
+    },
+    {
+        id: 'warehouse_shift',
+        notRandom: true, // forced from loadScenario every employed morning (6:00-10:00)
+        onLoad: () => { state.flags.lastWorkDay = state.day; },
+        text: () => {
+            if (!(state.flags.shiftsWorked > 0)) {
+                return "First shift. Duane walks you down the dock line at two minutes past six, pointing with the clipboard. 'Teo runs the forklift — twenty years, calls everybody chief, listen to him. Marisol runs inventory and does not repeat herself.' The work is pallets, box counts, and the long arithmetic of a truck that has to leave full. Nobody asks where you slept. Here, you're just the new hire.";
+            }
+            if ((state.flags.missedShifts || 0) === 1) {
+                return "The gate at six. Duane doesn't mention the day you called out, which is a message all by itself. Teo bumps your shoulder with his clipboard on the way past: 'Morning, chief.' The dock swallows the awkwardness the way it swallows everything — under pallets.";
+            }
+            switch (state.day % 3) {
+                case 0: return "Six a.m. at the gate. Teo's already three pallets deep and narrating the morning to no one — the traffic, his sister's dog, a forklift that pulls left like a shopping cart. 'Chief,' he says, by way of good morning, and the shift folds you into its rhythm.";
+                case 1: return "Marisol meets the truck with her scanner and a frown that turns out to be arithmetic, not mood. She hands you the count sheet without a word — which, you've learned, is what her trust looks like. The morning goes: boxes, numbers, the radio arguing with itself in the break room.";
+                default: return "Duane works the dock alongside everyone this morning, clipboard wedged in his back pocket, hauling like a man twenty years younger than his knees want him to be. Nobody works harder when he does it first. The truck leaves full and on time.";
+            }
+        },
+        choices: [
+            { text: "Clock in — hot lunch from the roach coach at the gate ($7.00).", requires: { cash: 7.00 }, effects: { cash: 121.00, hunger: 15, health: -4, mentalFortitude: 6, warmth: 8, timePassed: 8.5 }, nextScenario: 'shift_done' },
+            { text: "Clock in — eat from your bag at the lunch whistle.", requires: { stash: 1 }, effects: { cash: 128.00, foodStash: -1, hunger: 25, health: -4, mentalFortitude: 5, warmth: 8, timePassed: 8.5 }, nextScenario: 'shift_done' },
+            { text: "Clock in — work through lunch.", effects: { cash: 128.00, hunger: -20, health: -8, mentalFortitude: 2, warmth: 8, timePassed: 8.5 }, nextScenario: 'shift_done' },
+            {
+                text: "Call out. You can't face the dock today.",
+                customAction: () => {
+                    state.flags.missedShifts = (state.flags.missedShifts || 0) + 1;
+                    if (state.flags.missedShifts >= 2) {
+                        applyEffects({ timePassed: 0.2 });
+                        loadScenario('warehouse_fired');
+                    } else {
+                        applyEffects({ mentalFortitude: -8, timePassed: 0.2 });
+                        loadScenario('warehouse_missed');
+                    }
+                }
+            }
+        ]
+    },
+    {
+        id: 'shift_done',
+        notRandom: true,
+        onLoad: () => { state.flags.shiftsWorked = (state.flags.shiftsWorked || 0) + 1; },
+        text: () => {
+            switch ((state.flags.shiftsWorked || 0) % 3) {
+                case 1: return "The whistle ends the shift and the dock exhales. Your hands ache in a way day labor never quite managed — steadier, more honest, the ache of the same work you'll do again tomorrow. A hundred twenty-eight dollars, and nobody made you wait in line at dawn to earn it.";
+                case 2: return "Teo clocks out beside you, still narrating: the truck count, the forklift's politics, what his wife's making tonight. 'See you at six, chief.' It lands strangely warm. People expecting you tomorrow is its own kind of shelter.";
+                default: return "Duane stops you at the gate with two fingers, checks something off the clipboard, and gives you a nod that costs him visible effort. From him, you gather, that's employee of the month. The evening opens up in front of you, and for once it starts with money in your pocket.";
+            }
+        },
+        choices: [
+            { text: "Split a pot of coffee with Teo at the diner counter ($3.00).", requires: { cash: 3.00 }, effects: { cash: -3.00, mentalFortitude: 10, warmth: 15, timePassed: 0.7 }, nextScenario: null },
+            { text: "Sit down for a full hot meal — you earned it ($8.00).", requires: { cash: 8.00 }, effects: { cash: -8.00, health: 10, mentalFortitude: 20, warmth: 30, hunger: 70, timePassed: 0.7 }, nextScenario: null },
+            { text: "Stop by the convenience store on the walk back.", effects: { timePassed: 0.2 }, nextScenario: 'convenience_store' },
+            { text: "Head out into the evening.", nextScenario: null }
+        ]
+    },
+    {
+        id: 'warehouse_missed',
+        notRandom: true,
+        text: "You find the courage to call the office line. Teo answers and covers the pause like a pro — 'I'll tell him, chief' — and hangs up before it can get worse. Around noon your phone buzzes once. Duane: 'That's one.' Nothing else, all day.",
+        choices: [ { text: "The day is yours, for whatever that's worth.", nextScenario: null } ]
+    },
+    {
+        id: 'warehouse_fired',
+        notRandom: true,
+        text: "Duane is waiting at the gate hut with an envelope — your last pay, counted out in cash. He doesn't raise his voice. 'Second one. I told you the math.' He looks past you at the dock, where the work is already moving on without you. 'Pamela vouched for you. Go square it with her, not me.' The roll-up door comes down like a sentence ending.",
+        effects: { cash: 64.00, mentalFortitude: -25, timePassed: 0.5, flags: { hasJob: false, jobSearchUnlocked: false, firedFromWarehouse: true } },
+        choices: [ { text: "Walk. Anywhere.", nextScenario: null } ]
     },
     {
         id: 'day_center',
@@ -1676,7 +1800,7 @@ const scenarios = [
         notRandom: false,
         category: 'work',
         weight: 2,
-        condition: () => state.timeHour >= 6 && state.timeHour <= 10 && state.flags.lastLaborDay !== state.day,
+        condition: () => !state.flags.hasJob && state.timeHour >= 6 && state.timeHour <= 10 && state.flags.lastLaborDay !== state.day,
         onLoad: () => {
             state.flags.lastLaborDay = state.day;
             // No working phone means no dispatch texts: walk across town just to read the board
@@ -2598,10 +2722,16 @@ function loadScenario(id) {
         id = 'find_shelter';
     }
 
+    // A job changes what morning means: the warehouse gate replaces the ticket
+    // board, same window, same once-per-day stamp
+    if (!id && state.flags.hasJob && state.timeHour >= 6 && state.timeHour <= 10 && state.flags.lastWorkDay !== state.day) {
+        id = 'warehouse_shift';
+    }
+
     // The labor office is a guaranteed morning stop for everyone, once per day —
     // boots don't gate the stop, they gate which tickets you're allowed to take.
     // The stash decision lives inside it as a choice, so one stop carries both.
-    if (!id && state.timeHour >= 6 && state.timeHour <= 10 && state.flags.lastLaborDay !== state.day) {
+    if (!id && !state.flags.hasJob && state.timeHour >= 6 && state.timeHour <= 10 && state.flags.lastLaborDay !== state.day) {
         id = 'labor_office';
     }
 
@@ -2836,9 +2966,9 @@ function renderStats() {
     
     // Update goal mode UI
     if (state.mode === 'goal') {
-        document.getElementById('check-cash').textContent = state.cash >= 1200
-            ? '[x] Save $1200'
-            : `[$${Math.floor(state.cash)} / $1200] saved`;
+        document.getElementById('check-cash').textContent = state.cash >= WIN_CASH_GOAL
+            ? `[x] Save $${WIN_CASH_GOAL}`
+            : `[$${Math.floor(state.cash)} / $${WIN_CASH_GOAL}] saved`;
         document.getElementById('check-id').textContent = state.hasID
             ? '[x] Obtain state-issued ID'
             : state.flags.idOrdered
