@@ -1,6 +1,6 @@
 // Build version, shown on the title screen (initTitleScreen). Scheme 1.0.x.y:
 // bump x for a gameplay/content feature, y for a fix or tuning pass.
-const GAME_VERSION = '1.0.9.1';
+const GAME_VERSION = '1.0.10.0';
 
 // State
 let state = {
@@ -650,7 +650,15 @@ const scenarios = [
             { text: "Warm up with a cup of hot soup ($3.00)", requires: { cash: 3.00 }, effects: { cash: -3.00, health: 5, mentalFortitude: 15, warmth: 35, hunger: 30 } },
             { text: "Get a cup of hot coffee ($1.00)", requires: { cash: 1.00 }, effects: { cash: -1.00, health: 2, mentalFortitude: 15, warmth: 20, hunger: 5 } },
             { text: "Eat a packed meal from your bag.", requires: { stash: 1 }, effects: { foodStash: -1, hunger: 35, mentalFortitude: 5, timePassed: 0.3 } },
-            { text: "Stop by the convenience store on the corner.", effects: { timePassed: 0.2 }, nextScenario: 'convenience_store' }
+            { text: "Stop by the convenience store on the corner.", effects: { timePassed: 0.2 }, nextScenario: 'convenience_store' },
+            {
+                // Deliberate travel: the paperwork corner is a known place, not a
+                // lottery ticket — the walk is always on offer while the library's open
+                text: "Walk to the branch library on Sycamore — the Hopewell Day Center is right across the street (30 min).",
+                hidden: () => state.timeHour < 9 || state.timeHour >= 19,
+                effects: { timePassed: 0.5 },
+                nextScenario: 'hopewell_block'
+            }
         ]
     },
     {
@@ -1279,12 +1287,73 @@ const scenarios = [
     },
     // The Way Out: quest chain to make Goal Mode winnable (mailing address -> birth certificate -> ID -> clean clothes)
     {
+        // The paperwork corner: the branch library and the Hopewell Day Center
+        // face each other across Sycamore, so one deliberate walk serves the whole
+        // mail-and-records chain instead of waiting on the random draw
+        id: 'hopewell_block',
+        notRandom: true,
+        text: () => {
+            let t = "Sycamore and 4th. The branch library's stone steps on one side of the street, the Hopewell Day Center's hand-painted sign directly across. Half of everything the system wants from you — an address, a computer, a mail slot — lives on this one corner.";
+            if (state.timeHour > 16) t += " The day center's windows are dark; the mail window keeps nine-to-four hours.";
+            return t;
+        },
+        choices: [
+            {
+                text: "Cross to Hopewell and ask about the mail service.",
+                hidden: () => !(state.mode === 'goal' && !state.flags.hasMailingAddress && state.timeHour >= 9 && state.timeHour <= 16),
+                effects: { timePassed: 0.1 },
+                nextScenario: 'day_center'
+            },
+            {
+                text: "Check Hopewell's mail bin for your name.",
+                hidden: () => !(state.mode === 'goal' && state.flags.hasMailingAddress && state.timeHour >= 9 && state.timeHour <= 16
+                    && ((state.flags.birthCertOrdered && !state.flags.hasBirthCert) || (state.flags.idOrdered && !state.flags.idViaMotel && !state.hasID))),
+                customAction: () => {
+                    if (state.flags.birthCertOrdered && !state.flags.hasBirthCert && state.day >= (state.flags.birthCertArrivesDay || 0)) {
+                        loadScenario('mail_arrives');
+                    } else if (state.flags.idOrdered && !state.flags.idViaMotel && !state.hasID && state.day >= (state.flags.idArrivesDay || 0)) {
+                        loadScenario('id_arrives');
+                    } else {
+                        loadScenario('hopewell_no_mail');
+                    }
+                }
+            },
+            {
+                text: "Take a seat at a library computer.",
+                hidden: () => !(state.mode === 'goal' && state.flags.hasMailingAddress && !state.flags.birthCertOrdered && !state.hasID && state.timeHour >= 9 && state.timeHour <= 19),
+                effects: { timePassed: 0.1 },
+                nextScenario: 'order_birth_cert'
+            },
+            { text: "Sit a while in the periodicals section, out of the weather.", effects: { warmth: 12, mentalFortitude: 5, timePassed: 1 }, nextScenario: 'hopewell_block' },
+            { text: "Eat something from your bag at a corner table, head down.", requires: { stash: 1 }, effects: { foodStash: -1, hunger: 35, mentalFortitude: 5, timePassed: 0.3 }, nextScenario: 'hopewell_block' },
+            { text: "Head back out.", nextScenario: null }
+        ]
+    },
+    {
+        id: 'hopewell_no_mail',
+        notRandom: true,
+        text: () => {
+            // Only one piece of state mail can be in flight at a time: the ID
+            // can't be ordered until the birth certificate is in hand
+            const pendingDay = (state.flags.birthCertOrdered && !state.flags.hasBirthCert)
+                ? (state.flags.birthCertArrivesDay || 0)
+                : (state.flags.idArrivesDay || 0);
+            const wait = Math.max(1, pendingDay - state.day);
+            return "The volunteer works through the plastic bin twice, then shakes her head. 'Nothing with your name on it today. State mail comes when it comes — give it another " + (wait === 1 ? "day" : wait + " days") + ", maybe.'";
+        },
+        effects: { mentalFortitude: -2, timePassed: 0.3 },
+        choices: [
+            { text: "Cross back to the library.", nextScenario: 'hopewell_block' },
+            { text: "Head out.", nextScenario: null }
+        ]
+    },
+    {
         id: 'day_center',
         notRandom: false,
         category: 'quest',
         weight: 3,
         condition: () => state.mode === 'goal' && !state.flags.hasMailingAddress && state.timeHour >= 9 && state.timeHour <= 16,
-        text: "You pass the Hopewell Day Center — a squat brick building with a hand-painted sign. Inside there's coffee, a bathroom, and a volunteer at a folding table. She mentions they run a free mail service: you can use the center's address to receive letters, no questions asked.",
+        text: "You pass the Hopewell Day Center — a squat brick building with a hand-painted sign, directly across the street from the branch library. Inside there's coffee, a bathroom, and a volunteer at a folding table. She mentions they run a free mail service: you can use the center's address to receive letters, no questions asked.",
         effects: { warmth: 5, timePassed: 0.2 },
         choices: [
             { text: "Sign up for the mail service.", effects: { mentalFortitude: 10, timePassed: 1, flags: { hasMailingAddress: true } }, nextScenario: 'day_center_signed' },
@@ -1294,8 +1363,11 @@ const scenarios = [
     {
         id: 'day_center_signed',
         notRandom: true,
-        text: "The volunteer writes your name in a ledger and hands you a card with the center's address on it. 'Check back whenever we're open.' For the first time in months, you have an address. It's a start. Now you need $25 and a library computer to order your birth certificate.",
-        choices: [ { text: "Step back outside.", nextScenario: null } ]
+        text: "The volunteer writes your name in a ledger and hands you a card with the center's address on it. 'Check back whenever we're open.' For the first time in months, you have an address. It's a start. Now you need $25 and a library computer to order your birth certificate — and the library is right there across the street.",
+        choices: [
+            { text: "Cross the street and find a free computer.", hidden: () => state.timeHour > 19, effects: { timePassed: 0.1 }, nextScenario: 'order_birth_cert' },
+            { text: "Step back outside.", nextScenario: null }
+        ]
     },
     {
         id: 'order_birth_cert',
@@ -2243,9 +2315,12 @@ const scenarios = [
     {
         id: "library_research",
         notRandom: true,
-        text: "You use a public computer for 30 minutes. You learn that a replacement ID requires a birth certificate, which costs $25 to order with expedited processing. You also need a mailing address. It feels impossible — until you spot a flyer taped to the monitor: the Hopewell Day Center offers a free mail service for people without an address.",
+        text: "You use a public computer for 30 minutes. You learn that a replacement ID requires a birth certificate, which costs $25 to order with expedited processing. You also need a mailing address. It feels impossible — until you spot a flyer taped to the monitor: the Hopewell Day Center offers a free mail service for people without an address. The address on the flyer is directly across the street from this library.",
         effects: { mentalFortitude: -10, timePassed: 1 },
-        choices: [ { text: "Log off. Maybe there's a way after all.", nextScenario: null } ]
+        choices: [
+            { text: "Log off and cross the street while they're open.", hidden: () => !(state.mode === 'goal' && !state.flags.hasMailingAddress && state.timeHour >= 9 && state.timeHour <= 16), effects: { timePassed: 0.1 }, nextScenario: 'day_center' },
+            { text: "Log off. Maybe there's a way after all.", nextScenario: null }
+        ]
     },
     {
         id: "library_stay_quiet",
