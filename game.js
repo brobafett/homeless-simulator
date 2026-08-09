@@ -1,6 +1,6 @@
 // Build version, shown on the title screen (initTitleScreen). Scheme 1.0.x.y:
 // bump x for a gameplay/content feature, y for a fix or tuning pass.
-const GAME_VERSION = '1.0.9.0';
+const GAME_VERSION = '1.0.9.1';
 
 // State
 let state = {
@@ -516,6 +516,35 @@ const LABOR_TICKETS = [
     { text: "Leave. You're in no shape to work today.", nextScenario: null }
 ];
 
+// The corner-store shelf — shared between the walk-in scene and the browse loop
+// so buying one thing doesn't bounce you out the door mid-errand
+const STORE_PURCHASES = [
+    { text: "Grab a candy bar off the rack ($2.00).", requires: { cash: 2.00 }, effects: { cash: -2.00, hunger: 12, mentalFortitude: 3, timePassed: 0.1 }, nextScenario: 'convenience_store_browse' },
+    { text: "Pour a coffee from the self-serve machine ($2.00).", requires: { cash: 2.00 }, effects: { cash: -2.00, warmth: 20, mentalFortitude: 8, hunger: 5, timePassed: 0.1 }, nextScenario: 'convenience_store_browse' },
+    { text: "Eat a cold-case sandwich at the window counter ($5.00).", requires: { cash: 5.00 }, effects: { cash: -5.00, hunger: 30, mentalFortitude: 5, warmth: 5, timePassed: 0.3 }, nextScenario: 'convenience_store_browse' },
+    { text: "Buy a packaged meal to pack for later ($6.00).", requires: { cash: 6.00, stashSpace: true }, effects: { cash: -6.00, foodStash: 1, timePassed: 0.2 }, nextScenario: 'convenience_store_browse' },
+    {
+        text: "Buy a prepaid phone ($20.00).",
+        requires: { cash: 20.00, notFlag: 'hasPhone', notFlagLabel: '(You already own a phone)' },
+        customAction: () => {
+            state.flags.hasPhone = true;
+            state.flags.phoneExpiryDay = state.day + 5;
+            applyEffects({ cash: -20.00, mentalFortitude: 10, timePassed: 0.3 });
+            loadScenario('phone_bought');
+        }
+    },
+    {
+        text: "Top up your phone — 5 more days ($10.00).",
+        requires: { cash: 10.00, flag: 'hasPhone', flagLabel: "(You don't own a phone)" },
+        customAction: () => {
+            // Extend from today if the minutes already ran out
+            state.flags.phoneExpiryDay = Math.max(state.day, state.flags.phoneExpiryDay || 0) + 5;
+            applyEffects({ cash: -10.00, timePassed: 0.2 });
+            loadScenario('phone_topped_up');
+        }
+    }
+];
+
 const scenarios = [
     // Original Scenarios Converted
     {
@@ -640,44 +669,38 @@ const scenarios = [
         },
         effects: { warmth: 5, timePassed: 0.1 },
         choices: [
-            { text: "Grab a candy bar off the rack ($2.00).", requires: { cash: 2.00 }, effects: { cash: -2.00, hunger: 12, mentalFortitude: 3, timePassed: 0.1 } },
-            { text: "Pour a coffee from the self-serve machine ($2.00).", requires: { cash: 2.00 }, effects: { cash: -2.00, warmth: 20, mentalFortitude: 8, hunger: 5, timePassed: 0.1 } },
-            { text: "Eat a cold-case sandwich at the window counter ($5.00).", requires: { cash: 5.00 }, effects: { cash: -5.00, hunger: 30, mentalFortitude: 5, warmth: 5, timePassed: 0.3 } },
-            { text: "Buy a packaged meal to pack for later ($6.00).", requires: { cash: 6.00, stashSpace: true }, effects: { cash: -6.00, foodStash: 1, timePassed: 0.2 } },
-            {
-                text: "Buy a prepaid phone ($20.00).",
-                requires: { cash: 20.00, notFlag: 'hasPhone', notFlagLabel: '(You already own a phone)' },
-                customAction: () => {
-                    state.flags.hasPhone = true;
-                    state.flags.phoneExpiryDay = state.day + 5;
-                    applyEffects({ cash: -20.00, mentalFortitude: 10, timePassed: 0.3 });
-                    loadScenario('phone_bought');
-                }
-            },
-            {
-                text: "Top up your phone — 5 more days ($10.00).",
-                requires: { cash: 10.00, flag: 'hasPhone', flagLabel: "(You don't own a phone)" },
-                customAction: () => {
-                    // Extend from today if the minutes already ran out
-                    state.flags.phoneExpiryDay = Math.max(state.day, state.flags.phoneExpiryDay || 0) + 5;
-                    applyEffects({ cash: -10.00, timePassed: 0.2 });
-                    loadScenario('phone_topped_up');
-                }
-            },
+            ...STORE_PURCHASES,
             { text: "Warm your hands a minute and leave.", nextScenario: null }
+        ]
+    },
+    {
+        // Follow-up stop after any purchase — same shelf, no re-applied entry
+        // effects, so a run of transactions costs only what each item says
+        id: 'convenience_store_browse',
+        notRandom: true,
+        text: "The register drawer bangs shut and the clerk drifts back to the muted TV above the counter. Nobody minds you making another pass down the aisle.",
+        choices: [
+            ...STORE_PURCHASES,
+            { text: "Pay up and step back outside.", nextScenario: null }
         ]
     },
     {
         id: 'phone_bought',
         notRandom: true,
         text: "The clerk snaps the phone out of its plastic shell and activates it at the counter. It's cheap, the screen is scratched, but it rings — and that changes everything. The day labor dispatcher can text you the morning ticket list now. No more two-hour walks just to read a board.",
-        choices: [ { text: "Pocket the phone and save the dispatcher's number.", nextScenario: null } ]
+        choices: [
+            { text: "Save the dispatcher's number, then pick up a few things while you're here.", nextScenario: 'convenience_store_browse' },
+            { text: "Pocket the phone and head out.", nextScenario: null }
+        ]
     },
     {
         id: 'phone_topped_up',
         notRandom: true,
         text: "You scratch the foil off the top-up card and punch in the code. Five more days of minutes. Five more days of being reachable — which, out here, is five more days of being employable.",
-        choices: [ { text: "Step back outside.", nextScenario: null } ]
+        choices: [
+            { text: "Grab a few things while you're at the counter.", nextScenario: 'convenience_store_browse' },
+            { text: "Step back outside.", nextScenario: null }
+        ]
     },
     // New Advanced Scenarios
     {
