@@ -1,6 +1,6 @@
 // Build version, shown on the title screen (initTitleScreen). Scheme 1.0.x.y:
 // bump x for a gameplay/content feature, y for a fix or tuning pass.
-const GAME_VERSION = '1.0.17.0';
+const GAME_VERSION = '1.0.18.0';
 
 // Winning means signing a lease: first month, deposit, and the application
 // fees nobody warns you about. Referenced by checkGameStatus and the sidebar
@@ -50,7 +50,11 @@ let state = {
         // Paul: Ray in ten years without the network. His scams only ever cost
         // cash and hours — never papers, never quest progress
         metPaul: false,
-        transitPasses: 0
+        transitPasses: 0,
+        // The bank: pocket cash is what a thief can reach; the checking balance
+        // is what they can't. Opens with the ID — the system protects the documented
+        hasBankAccount: false,
+        bankBalance: 0
     }
 };
 
@@ -175,7 +179,8 @@ function checkGameStatus() {
 
     // 2. Check for Win (Only in Goal Mode)
     if (state.mode === "goal") {
-        if (state.cash >= WIN_CASH_GOAL && state.hasID && state.hasCleanClothes) {
+        // The lease money can live in either pocket — the mattress or the bank
+        if (state.cash + (state.flags.bankBalance || 0) >= WIN_CASH_GOAL && state.hasID && state.hasCleanClothes) {
             return "VICTORY: You secured a lease on a small apartment. You broke the cycle.";
         }
     }
@@ -569,6 +574,17 @@ const STORE_PURCHASES = [
             applyEffects({ cash: -10.00, timePassed: 0.2 });
             loadScenario('phone_topped_up');
         }
+    },
+    {
+        // Out-of-network ATM by the door: the corner-store tax, banking edition.
+        // After-hours access to the balance, at a price the branch never charges
+        text: "Pull $40 from the ATM by the door ($3.00 fee).",
+        hidden: () => !(state.flags.hasBankAccount && (state.flags.bankBalance || 0) >= 43),
+        customAction: () => {
+            state.flags.bankBalance = Math.round(((state.flags.bankBalance || 0) - 43) * 100) / 100;
+            applyEffects({ cash: 40.00, timePassed: 0.1 });
+            loadScenario('convenience_store_browse');
+        }
     }
 ];
 
@@ -685,6 +701,17 @@ const scenarios = [
                 hidden: () => state.timeHour < 7.5 || state.timeHour >= 19,
                 effects: { timePassed: 0.5 },
                 nextScenario: 'hopewell_block'
+            },
+            {
+                // The ID's first dividend past the checklist: a bank will talk to
+                // you now. Banked money sits out of reach of every theft roll —
+                // and out of reach of your own pocket until you withdraw it
+                text: () => state.flags.hasBankAccount
+                    ? "Walk to Cornerstone Community Bank on Merchant (20 min)."
+                    : "Take your new ID past that FREE CHECKING banner at Cornerstone Community Bank (20 min).",
+                hidden: () => !(state.mode === 'goal' && state.hasID && state.timeHour >= 9 && state.timeHour <= 16.5),
+                effects: { timePassed: 0.35 },
+                nextScenario: 'bank_branch'
             }
         ]
     },
@@ -1600,6 +1627,13 @@ const scenarios = [
         choices: [
             { text: "Split a pot of coffee with Teo at the diner counter ($3.00).", requires: { cash: 3.00 }, effects: { cash: -3.00, mentalFortitude: 10, warmth: 15, timePassed: 0.7 }, nextScenario: null },
             { text: "Sit down for a full hot meal — you earned it ($8.00).", requires: { cash: 8.00 }, effects: { cash: -8.00, health: 10, mentalFortitude: 20, warmth: 30, hunger: 70, timePassed: 0.7 }, nextScenario: null },
+            {
+                // Payday ritual: a shift's cash walked straight past the thieves' reach
+                text: () => `Walk your pay to the bank before the teller window closes ($${state.cash.toFixed(2)} in your pocket).`,
+                hidden: () => !(state.flags.hasBankAccount && state.timeHour >= 9 && state.timeHour <= 16.5),
+                effects: { timePassed: 0.35 },
+                nextScenario: 'bank_branch'
+            },
             { text: "Stop by the convenience store on the walk back.", effects: { timePassed: 0.2 }, nextScenario: 'convenience_store' },
             { text: "Head out into the evening.", nextScenario: null }
         ]
@@ -1733,6 +1767,86 @@ const scenarios = [
             " Inside: a laminated card, your own face looking back at you. You exist again, officially. Doors that were closed — shelters, clinics, real jobs, housing — just cracked open.",
         effects: { mentalFortitude: 20, timePassed: 0.5, hasID: true },
         choices: [ { text: "Step outside, standing a little taller.", nextScenario: null } ]
+    },
+    {
+        // The bank: what the ID buys beyond the win checklist. Every theft roll
+        // in the game reads state.cash, so the checking balance is safe by
+        // construction — and requires.cash reads pockets only, so banked money
+        // can't be spent on impulse either. Safety costs liquidity; that's the
+        // trade. Transactions loop back here so the teller text re-renders the
+        // balance as live feedback.
+        id: 'bank_branch',
+        notRandom: true,
+        effects: { timePassed: 0.1 },
+        text: () => {
+            if (!state.flags.hasBankAccount) {
+                return "Cornerstone Community Bank holds a corner storefront on Merchant — brick, glass, a FREE CHECKING banner sun-faded to pink. The guard holds the door like you're anyone, which you suppose you now are. Inside it's library-quiet: carpet, rope lines, a teller named Denise with reading glasses and no hurry in her at all. The placard on the counter lists what an account takes — photo ID, mailing address, twenty-five dollars to open. For the first time since you landed outside, you can answer for all three.";
+            }
+            const bal = (state.flags.bankBalance || 0).toFixed(2);
+            return `The guard nods you through — you're a customer here. Denise has your account up before you finish giving your name, and she turns the screen so you can see it: $${bal}, in digits. Not folded into a sock, not riding in a pocket through a night under the overpass. Just numbers, waiting, where nobody's hands can reach them but yours.`;
+        },
+        choices: [
+            {
+                text: "Open the free checking account ($25.00 minimum opening deposit).",
+                hidden: () => state.flags.hasBankAccount,
+                requires: { cash: 25.00 },
+                customAction: () => {
+                    state.flags.hasBankAccount = true;
+                    state.flags.bankBalance = (state.flags.bankBalance || 0) + 25;
+                    applyEffects({ cash: -25.00, mentalFortitude: 15, timePassed: 0.7 });
+                    loadScenario('bank_account_opened');
+                }
+            },
+            {
+                text: () => `Deposit everything but $20 walking money ($${Math.max(0, state.cash - 20).toFixed(2)}).`,
+                hidden: () => !state.flags.hasBankAccount || state.cash <= 20,
+                customAction: () => {
+                    const amt = Math.round((state.cash - 20) * 100) / 100;
+                    state.flags.bankBalance = Math.round(((state.flags.bankBalance || 0) + amt) * 100) / 100;
+                    applyEffects({ cash: -amt, timePassed: 0.2 });
+                    loadScenario('bank_branch');
+                }
+            },
+            {
+                text: () => `Deposit every dollar in your pockets ($${state.cash.toFixed(2)}).`,
+                hidden: () => !state.flags.hasBankAccount || state.cash <= 0,
+                customAction: () => {
+                    const amt = Math.round(state.cash * 100) / 100;
+                    state.flags.bankBalance = Math.round(((state.flags.bankBalance || 0) + amt) * 100) / 100;
+                    applyEffects({ cash: -amt, timePassed: 0.2 });
+                    loadScenario('bank_branch');
+                }
+            },
+            {
+                text: "Withdraw $40 for the week's pockets.",
+                hidden: () => !state.flags.hasBankAccount || (state.flags.bankBalance || 0) < 40,
+                customAction: () => {
+                    state.flags.bankBalance = Math.round(((state.flags.bankBalance || 0) - 40) * 100) / 100;
+                    applyEffects({ cash: 40.00, timePassed: 0.1 });
+                    loadScenario('bank_branch');
+                }
+            },
+            {
+                text: () => `Withdraw everything ($${(state.flags.bankBalance || 0).toFixed(2)}).`,
+                hidden: () => !state.flags.hasBankAccount || (state.flags.bankBalance || 0) <= 0,
+                customAction: () => {
+                    const amt = state.flags.bankBalance || 0;
+                    state.flags.bankBalance = 0;
+                    applyEffects({ cash: amt, timePassed: 0.1 });
+                    loadScenario('bank_branch');
+                }
+            },
+            { text: "Step back out onto Merchant.", nextScenario: null }
+        ]
+    },
+    {
+        id: 'bank_account_opened',
+        notRandom: true,
+        text: "Fifteen minutes of forms. Denise types your name and gets the spelling right the first time, doesn't blink at the Hopewell address, and slides a flat plastic card across the counter with both hands like it's something. 'That's yours. No monthly fee, no minimum after today.' You sign the back against the counter, and it hits you sideways: a card with your name printed on it, a machine in any lobby in the city ready to vouch for you. Money in here doesn't ride in a shoe through a bad night. It doesn't walk off while you sleep. It just waits, and it's yours, and there's a paper trail that says so.",
+        choices: [
+            { text: "Back to the teller window — might as well use it.", nextScenario: 'bank_branch' },
+            { text: "Pocket the card and step out onto Merchant.", nextScenario: null }
+        ]
     },
     {
         id: 'clothing_closet',
@@ -2987,6 +3101,8 @@ function renderGear() {
     const motelDays = state.flags.motelDaysRemaining || 0;
     if (motelDays > 0) items.push(`Motel residency proof (${motelDays} day${motelDays === 1 ? '' : 's'} remaining)`);
 
+    if (state.flags.hasBankAccount) items.push(`ATM card — checking $${(state.flags.bankBalance || 0).toFixed(2)}`);
+
     const passes = state.flags.transitPasses || 0;
     if (passes > 0) items.push(`Bus day pass${passes === 1 ? '' : `es (×${passes})`}`);
 
@@ -3063,9 +3179,10 @@ function renderStats() {
     
     // Update goal mode UI
     if (state.mode === 'goal') {
-        document.getElementById('check-cash').textContent = state.cash >= WIN_CASH_GOAL
+        const totalSaved = state.cash + (state.flags.bankBalance || 0);
+        document.getElementById('check-cash').textContent = totalSaved >= WIN_CASH_GOAL
             ? `[x] Save $${WIN_CASH_GOAL}`
-            : `[$${Math.floor(state.cash)} / $${WIN_CASH_GOAL}] saved`;
+            : `[$${Math.floor(totalSaved)} / $${WIN_CASH_GOAL}] saved`;
         document.getElementById('check-id').textContent = state.hasID
             ? '[x] Obtain state-issued ID'
             : state.flags.idOrdered
