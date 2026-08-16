@@ -1,6 +1,6 @@
 // Build version, shown on the title screen (initTitleScreen). Scheme 1.0.x.y:
 // bump x for a gameplay/content feature, y for a fix or tuning pass.
-const GAME_VERSION = '1.0.16.0';
+const GAME_VERSION = '1.0.17.0';
 
 // Winning means signing a lease: first month, deposit, and the application
 // fees nobody warns you about. Referenced by checkGameStatus and the sidebar
@@ -2174,6 +2174,23 @@ const scenarios = [
                 }
             },
             {
+                text: () => `Pharmacy run, and offer to put him up at the motel tonight ($${(8 + roomCost('motel')).toFixed(2)}).`,
+                requires: { cash: () => 8 + roomCost('motel') },
+                customAction: () => {
+                    state.flags.streetRep = (state.flags.streetRep || 0) + 1;
+                    // Pride loses to a wet cough in winter; the rest of the year it's a coin worth less than even
+                    const takesRoom = currentSeason() === 'winter' || Math.random() < 0.4;
+                    if (takesRoom) {
+                        applyEffects({ cash: -(8 + roomCost('motel')), mentalFortitude: 10, timePassed: 2.5 });
+                        loadScenario('ray_room_taken');
+                    } else {
+                        // He waves the room off — only the pharmacy money is spent
+                        applyEffects({ cash: -8.00, mentalFortitude: 8, timePassed: 2 });
+                        loadScenario('ray_room_refused');
+                    }
+                }
+            },
+            {
                 text: "Give him your packed meal and stay while he eats it.",
                 requires: { stash: 1 },
                 customAction: () => {
@@ -2197,6 +2214,18 @@ const scenarios = [
         id: 'ray_helped',
         notRandom: true,
         text: "Cough syrup, aspirin, water, or just your shoulder against the wall next to his — he takes what you brought without ceremony. 'Square,' he says eventually, which from Ray is a whole paragraph. That's it. That's the transaction. Nothing comes of it, and nothing was supposed to; some things you do because a man sat with you when you were new and the wind was wrong.",
+        choices: [ { text: "Leave him resting easier.", nextScenario: null } ]
+    },
+    {
+        id: 'ray_room_taken',
+        notRandom: true,
+        text: "He argues with the idea for about four seconds — 'Don't fuss' — and then the cough makes his case for you. You walk the pharmacy bag and the man to the motel together, the cart complaining the whole way. The clerk finds a ground-floor room so the cart can come inside. Ray sits on the edge of the bed like it might be repossessed, then lies back with the cough syrup on the nightstand and his boots still on. 'One night,' he says at the ceiling. 'Square and then some.' Twenty-two years out here, and you'd bet the heater ticking is the loudest thing he's slept next to in months.",
+        choices: [ { text: "Pull the door shut behind you.", nextScenario: null } ]
+    },
+    {
+        id: 'ray_room_refused',
+        notRandom: true,
+        text: "He hears the whole offer out, which from Ray is itself a courtesy, then shakes his head once. 'Room doesn't fit the cart, and I don't sleep right behind a door I didn't pay for.' That's the entire negotiation. The pharmacy bag he takes — cough syrup, aspirin, a bottle of water — without ceremony, and works the seal off the syrup right there against the laundromat wall. 'Square,' he says, which is a whole paragraph. The motel money stays in your pocket. The offer doesn't; he'll remember you made it.",
         choices: [ { text: "Leave him resting easier.", nextScenario: null } ]
     },
     {
