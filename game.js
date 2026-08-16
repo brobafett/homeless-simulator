@@ -1,6 +1,6 @@
 // Build version, shown on the title screen (initTitleScreen). Scheme 1.0.x.y:
 // bump x for a gameplay/content feature, y for a fix or tuning pass.
-const GAME_VERSION = '1.0.19.0';
+const GAME_VERSION = '1.0.20.0';
 
 // Winning means signing a lease: first month, deposit, and the application
 // fees nobody warns you about. Referenced by checkGameStatus and the sidebar
@@ -404,9 +404,27 @@ function roomCost(tier) {
     return room.cost;
 }
 
+// The motel has a card reader; the Alcove has a cigar box. With the ATM card,
+// motel tiers can be paid from combined funds — pocket cash spends first, the
+// checking balance covers the rest. requires.funds gates on the combined total.
+function totalFunds() {
+    return state.cash + (state.flags.hasBankAccount ? (state.flags.bankBalance || 0) : 0);
+}
+function payWithFunds(amount) {
+    const fromCash = Math.min(state.cash, amount);
+    state.cash = Math.round((state.cash - fromCash) * 100) / 100;
+    const fromCard = Math.round((amount - fromCash) * 100) / 100;
+    if (fromCard > 0) state.flags.bankBalance = Math.max(0, Math.round(((state.flags.bankBalance || 0) - fromCard) * 100) / 100);
+    return fromCard;
+}
+
 function resolveRoom(tier, prepaid) {
     const room = ROOM_TIERS[tier];
-    if (!prepaid) state.cash = Math.max(0, state.cash - roomCost(tier));
+    let cardPaid = 0;
+    if (!prepaid) {
+        if (tier === 'flophouse') state.cash = Math.max(0, state.cash - roomCost(tier));
+        else cardPaid = payWithFunds(roomCost(tier));
+    }
     // Nights stack on whatever's already on the ledger (same rule as
     // renewMotelWeek) — buying mid-week must never eat paid nights
     if (room.nights) state.flags.motelDaysRemaining = (state.flags.motelDaysRemaining || 0) + room.nights;
@@ -434,6 +452,9 @@ function resolveRoom(tier, prepaid) {
     if (checkGameStatus() !== "CONTINUE") return;
 
     let msg = (prepaid && room.prepaidMsg) ? room.prepaidMsg : room.msg;
+    if (cardPaid > 0) {
+        msg += ` The clerk runs your card for $${cardPaid.toFixed(2)} of it without a second look — the first roof in a long time with a receipt behind it.`;
+    }
     if (reunited) {
         msg += " Your gear sits on the luggage rack exactly where you left it this morning — untouched, because nobody could touch it.";
     }
@@ -459,7 +480,7 @@ function resolveRoom(tier, prepaid) {
     choicesContainer.innerHTML = `
         ${idAtDesk ? `<button class="choice-btn" onclick="loadScenario('id_arrives')">The clerk holds up an envelope with a state seal — pick up your mail at the desk.</button>` : ''}
         ${roomTonight ? `<button class="choice-btn" onclick="leaveGearAtMotel()">Leave the sleeping bag and heavy gear in the room — it's paid through tonight.</button>` : ''}
-        ${checkoutMorning ? `<button class="choice-btn" onclick="renewMotelWeek()" ${state.cash < renewCost ? 'disabled' : ''}>Stop at the desk and pay for six more nights ($${renewCost.toFixed(2)}).${state.cash < renewCost ? ' (Not enough cash)' : ''}</button>` : ''}
+        ${checkoutMorning ? `<button class="choice-btn" onclick="renewMotelWeek()" ${totalFunds() < renewCost ? 'disabled' : ''}>Stop at the desk and pay for six more nights ($${renewCost.toFixed(2)}).${totalFunds() < renewCost ? ' (Not enough money)' : ''}</button>` : ''}
         ${deskHold ? `<button class="choice-btn" onclick="leaveGearAtDesk()">Ask the desk to hold your pack until evening.</button>` : ''}
         <button class="choice-btn" onclick="loadScenario()">${prepaid ? 'Lock the door behind you and head out' : 'Check out and step outside'}</button>
     `;
@@ -470,14 +491,17 @@ function resolveRoom(tier, prepaid) {
 // find out what the sidewalk costs this week. Nights add on, never overwrite.
 function renewMotelWeek() {
     const cost = roomCost('motel_weekly');
-    if (state.cash < cost) return;
-    state.cash = Math.max(0, state.cash - cost);
+    if (totalFunds() < cost) return;
+    const cardPaid = payWithFunds(cost);
     state.flags.motelDaysRemaining = (state.flags.motelDaysRemaining || 0) + ROOM_TIERS.motel_weekly.nights;
 
     renderStats();
     if (checkGameStatus() !== "CONTINUE") return;
 
-    document.getElementById('narrative-text').innerHTML = `<p>You count the bills out before the clerk can ask for the key back. They slide it right back across the counter without ceremony — six more nights on the ledger, same room, same lock. Upstairs, the bed is still unmade the way you left it. It's still yours.</p>`;
+    const renewMsg = cardPaid > 0
+        ? `You slide the ATM card across the desk before the clerk can ask for the key back. Four seconds of card-reader noises and they slide the key right back — six more nights on the ledger, same room, same lock, and a paper trail that says you live somewhere. Upstairs, the bed is still unmade the way you left it. It's still yours.`
+        : `You count the bills out before the clerk can ask for the key back. They slide it right back across the counter without ceremony — six more nights on the ledger, same room, same lock. Upstairs, the bed is still unmade the way you left it. It's still yours.`;
+    document.getElementById('narrative-text').innerHTML = `<p>${renewMsg}</p>`;
 
     const roomTonight = ownsSleepingBag() && !state.flags.gearStashed;
     const idAtDesk = state.mode === 'goal' && state.flags.idOrdered && state.flags.idViaMotel && !state.hasID && state.day >= (state.flags.idArrivesDay || 0);
@@ -668,12 +692,15 @@ const scenarios = [
             if (state.flags.returned_wallet) {
                 text += " The manager at the motel desk is the person whose wallet you returned. They quietly knock 20% off the motel's rates whenever they see you: 'Honest people stay cheaper here.'";
             }
+            if (state.flags.hasBankAccount) {
+                text += " A curling CARDS ACCEPTED sticker on the motel office glass means your ATM card is money here. The Alcove's door just says CASH.";
+            }
             return text;
         },
         choices: [
             { text: "A bunk at the Alcove flophouse ($18.00).", requires: { cash: 18.00 }, customAction: () => resolveRoom('flophouse') },
-            { text: () => `A room at the budget motel ($${roomCost('motel').toFixed(2)}).`, requires: { cash: () => roomCost('motel') }, customAction: () => resolveRoom('motel') },
-            { text: () => `Six nights at the motel, paid up front ($${roomCost('motel_weekly').toFixed(2)}).`, requires: { cash: () => roomCost('motel_weekly') }, customAction: () => resolveRoom('motel_weekly') },
+            { text: () => `A room at the budget motel ($${roomCost('motel').toFixed(2)}).`, requires: { funds: () => roomCost('motel') }, customAction: () => resolveRoom('motel') },
+            { text: () => `Six nights at the motel, paid up front ($${roomCost('motel_weekly').toFixed(2)}).`, requires: { funds: () => roomCost('motel_weekly') }, customAction: () => resolveRoom('motel_weekly') },
             { text: "Too rich for tonight. Reconsider your options.", customAction: () => loadScenario('find_shelter') }
         ]
     },
@@ -3028,6 +3055,9 @@ function loadScenario(id) {
             if (choice.requires) {
                 const cashReq = typeof choice.requires.cash === 'function' ? choice.requires.cash() : choice.requires.cash;
                 if (cashReq !== undefined && state.cash < cashReq) { reqMet = false; reqMsg = `(Requires $${cashReq.toFixed(2)})`; }
+                // funds: pocket cash plus the checking balance (card-reader vendors only)
+                const fundsReq = typeof choice.requires.funds === 'function' ? choice.requires.funds() : choice.requires.funds;
+                if (fundsReq !== undefined && totalFunds() < fundsReq) { reqMet = false; reqMsg = `(Requires $${fundsReq.toFixed(2)})`; }
                 if (choice.requires.mentalFortitude !== undefined && state.mental < choice.requires.mentalFortitude) { reqMet = false; reqMsg = `(Requires ${choice.requires.mentalFortitude}% Mental Fortitude)`; }
                 if (choice.requires.health !== undefined && state.health < choice.requires.health) { reqMet = false; reqMsg = `(Requires ${choice.requires.health}% Health)`; }
                 if (choice.requires.hunger !== undefined && state.hunger < choice.requires.hunger) { reqMet = false; reqMsg = `(Requires ${choice.requires.hunger}% Hunger)`; }
