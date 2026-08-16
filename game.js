@@ -1,6 +1,6 @@
 // Build version, shown on the title screen (initTitleScreen). Scheme 1.0.x.y:
 // bump x for a gameplay/content feature, y for a fix or tuning pass.
-const GAME_VERSION = '1.0.18.0';
+const GAME_VERSION = '1.0.19.0';
 
 // Winning means signing a lease: first month, deposit, and the application
 // fees nobody warns you about. Referenced by checkGameStatus and the sidebar
@@ -576,13 +576,26 @@ const STORE_PURCHASES = [
         }
     },
     {
-        // Out-of-network ATM by the door: the corner-store tax, banking edition.
-        // After-hours access to the balance, at a price the branch never charges
+        // Cornerstone's machine by the door — the store owner takes his cut on
+        // cash out (the corner-store tax, banking edition), but envelope
+        // deposits are free. After-hours access both directions
         text: "Pull $40 from the ATM by the door ($3.00 fee).",
         hidden: () => !(state.flags.hasBankAccount && (state.flags.bankBalance || 0) >= 43),
         customAction: () => {
             state.flags.bankBalance = Math.round(((state.flags.bankBalance || 0) - 43) * 100) / 100;
             applyEffects({ cash: 40.00, timePassed: 0.1 });
+            loadScenario('convenience_store_browse');
+        }
+    },
+    {
+        // The after-hours answer to a shift that ends past the teller window:
+        // feed the pay envelope into the machine on the walk back
+        text: () => `Feed your pay into the ATM — deposit everything but $20 ($${Math.max(0, state.cash - 20).toFixed(2)}).`,
+        hidden: () => !(state.flags.hasBankAccount && state.cash > 20),
+        customAction: () => {
+            const amt = Math.round((state.cash - 20) * 100) / 100;
+            state.flags.bankBalance = Math.round(((state.flags.bankBalance || 0) + amt) * 100) / 100;
+            applyEffects({ cash: -amt, timePassed: 0.1 });
             loadScenario('convenience_store_browse');
         }
     }
@@ -1416,6 +1429,16 @@ const scenarios = [
                 effects: { timePassed: 0.1 },
                 nextScenario: 'pamela_checkin'
             },
+            {
+                // The paperwork corner's natural next stop: the bank is deliberate
+                // travel from here, not a random-draw lottery like idle_time
+                text: () => state.flags.hasBankAccount
+                    ? "Walk over to Cornerstone Community Bank on Merchant (20 min)."
+                    : "Take your new ID to Cornerstone Community Bank on Merchant — free checking (20 min).",
+                hidden: () => !(state.mode === 'goal' && state.hasID && state.timeHour >= 9 && state.timeHour <= 16.5),
+                effects: { timePassed: 0.35 },
+                nextScenario: 'bank_branch'
+            },
             { text: "Sit a while in the periodicals section, out of the weather.", effects: { warmth: 12, mentalFortitude: 5, timePassed: 1 }, nextScenario: 'hopewell_block' },
             { text: "Eat something from your bag at a corner table, head down.", requires: { stash: 1 }, effects: { foodStash: -1, hunger: 35, mentalFortitude: 5, timePassed: 0.3 }, nextScenario: 'hopewell_block' },
             { text: "Head back out.", nextScenario: null }
@@ -1628,9 +1651,14 @@ const scenarios = [
             { text: "Split a pot of coffee with Teo at the diner counter ($3.00).", requires: { cash: 3.00 }, effects: { cash: -3.00, mentalFortitude: 10, warmth: 15, timePassed: 0.7 }, nextScenario: null },
             { text: "Sit down for a full hot meal — you earned it ($8.00).", requires: { cash: 8.00 }, effects: { cash: -8.00, health: 10, mentalFortitude: 20, warmth: 30, hunger: 70, timePassed: 0.7 }, nextScenario: null },
             {
-                // Payday ritual: a shift's cash walked straight past the thieves' reach
-                text: () => `Walk your pay to the bank before the teller window closes ($${state.cash.toFixed(2)} in your pocket).`,
-                hidden: () => !(state.flags.hasBankAccount && state.timeHour >= 9 && state.timeHour <= 16.5),
+                // Payday ritual: a shift's cash walked straight past the thieves'
+                // reach. No account yet? An early whistle is exactly the day to
+                // open one — the employed player never sees idle_time in banker's
+                // hours, so the offer has to live here
+                text: () => state.flags.hasBankAccount
+                    ? `Walk your pay to the bank before the teller window closes ($${state.cash.toFixed(2)} in your pocket).`
+                    : "Take your pay and your ID to Cornerstone Community Bank — the teller window's still open (20 min).",
+                hidden: () => !(state.mode === 'goal' && state.hasID && state.timeHour >= 9 && state.timeHour <= 16.5),
                 effects: { timePassed: 0.35 },
                 nextScenario: 'bank_branch'
             },
