@@ -1,6 +1,6 @@
 // Build version, shown on the title screen (initTitleScreen). Scheme 1.0.x.y:
 // bump x for a gameplay/content feature, y for a fix or tuning pass.
-const GAME_VERSION = '1.0.12.0';
+const GAME_VERSION = '1.0.16.0';
 
 // Winning means signing a lease: first month, deposit, and the application
 // fees nobody warns you about. Referenced by checkGameStatus and the sidebar
@@ -446,9 +446,13 @@ function resolveRoom(tier, prepaid) {
     const checkoutMorning = atMotel && remaining <= 0;
     const renewCost = roomCost('motel_weekly');
     const deskHold = checkoutMorning && ownsSleepingBag() && !state.flags.gearStashed;
+    // The DMV envelope shouldn't be a lottery ticket: you pass this desk every
+    // night you sleep here, so the morning it's due, the desk offers it
+    const idAtDesk = atMotel && state.mode === 'goal' && state.flags.idOrdered && state.flags.idViaMotel && !state.hasID && state.day >= (state.flags.idArrivesDay || 0);
 
     const choicesContainer = document.getElementById('choices-list');
     choicesContainer.innerHTML = `
+        ${idAtDesk ? `<button class="choice-btn" onclick="loadScenario('id_arrives')">The clerk holds up an envelope with a state seal — pick up your mail at the desk.</button>` : ''}
         ${roomTonight ? `<button class="choice-btn" onclick="leaveGearAtMotel()">Leave the sleeping bag and heavy gear in the room — it's paid through tonight.</button>` : ''}
         ${checkoutMorning ? `<button class="choice-btn" onclick="renewMotelWeek()" ${state.cash < renewCost ? 'disabled' : ''}>Stop at the desk and pay for six more nights ($${renewCost.toFixed(2)}).${state.cash < renewCost ? ' (Not enough cash)' : ''}</button>` : ''}
         ${deskHold ? `<button class="choice-btn" onclick="leaveGearAtDesk()">Ask the desk to hold your pack until evening.</button>` : ''}
@@ -471,7 +475,9 @@ function renewMotelWeek() {
     document.getElementById('narrative-text').innerHTML = `<p>You count the bills out before the clerk can ask for the key back. They slide it right back across the counter without ceremony — six more nights on the ledger, same room, same lock. Upstairs, the bed is still unmade the way you left it. It's still yours.</p>`;
 
     const roomTonight = ownsSleepingBag() && !state.flags.gearStashed;
+    const idAtDesk = state.mode === 'goal' && state.flags.idOrdered && state.flags.idViaMotel && !state.hasID && state.day >= (state.flags.idArrivesDay || 0);
     document.getElementById('choices-list').innerHTML = `
+        ${idAtDesk ? `<button class="choice-btn" onclick="loadScenario('id_arrives')">The clerk holds up an envelope with a state seal — pick up your mail at the desk.</button>` : ''}
         ${roomTonight ? `<button class="choice-btn" onclick="leaveGearAtMotel()">Leave the sleeping bag and heavy gear in the room — it's paid through tonight.</button>` : ''}
         <button class="choice-btn" onclick="loadScenario()">Lock the door behind you and head out</button>
     `;
@@ -519,6 +525,20 @@ const LABOR_TICKETS = [
         hidden: () => state.flags.hasWorkBoots,
         effects: { timePassed: 0.3 },
         nextScenario: 'shoe_store'
+    },
+    {
+        // Same rule for the paperwork corner: Pamela and the mail window keep
+        // eight-to-four hours, and the office is the one stop the day guarantees —
+        // so the walk to Sycamore always starts here. Leave before eight and you
+        // wait on the library steps; the system's hours are not your hours.
+        text: () => (state.timeHour + 0.5 < 8
+            ? "Skip the board — walk to Sycamore and wait on the steps until Hopewell opens at eight."
+            : "Skip the board — walk to the library and Hopewell Day Center on Sycamore (30 min)."),
+        customAction: () => {
+            const wait = Math.max(0, 8 - (state.timeHour + 0.5));
+            applyEffects({ timePassed: 0.5 + wait });
+            loadScenario('hopewell_block');
+        }
     },
     { text: "Leave. You're in no shape to work today.", nextScenario: null }
 ];
@@ -662,7 +682,7 @@ const scenarios = [
                 // Deliberate travel: the paperwork corner is a known place, not a
                 // lottery ticket — the walk is always on offer while the library's open
                 text: "Walk to the branch library on Sycamore — the Hopewell Day Center is right across the street (30 min).",
-                hidden: () => state.timeHour < 9 || state.timeHour >= 19,
+                hidden: () => state.timeHour < 7.5 || state.timeHour >= 19,
                 effects: { timePassed: 0.5 },
                 nextScenario: 'hopewell_block'
             }
@@ -722,12 +742,36 @@ const scenarios = [
         id: "intake_appointment",
         notRandom: false,
         category: 'quest',
-        condition: () => !state.hasID && state.timeHour >= 9 && state.timeHour <= 16 && !state.flags.intake_attempted,
-        text: "You finally made it to your housing assessment appointment after walking 3 miles. The caseworker is sympathetic but looks at your clipboard. 'I need a state-issued photo ID and a verification of homelessness form from a registered shelter to process this.' You have neither, and the shelter won't give you a form without an ID.",
+        condition: () => state.mode === 'goal' && !state.hasID && state.timeHour >= 9 && state.timeHour <= 16 && !state.flags.intake_attempted,
+        // The catch-22 is the point, but it has to be coherent: a shelter regular
+        // hears that the shelter CAN verify them — it's the missing ID that blocks
+        // the form, and the ID is the one thing the game actually lets you fix
+        text: () => {
+            const base = "You finally made it to your housing assessment appointment after walking 3 miles. The caseworker is sympathetic but looks at your clipboard. 'I need a state-issued photo ID and a verification of homelessness form from a registered shelter to process this.'";
+            if (state.flags.lastNightTier === 'shelter') {
+                return base + " You tell her you sleep at the shelter — she nods, she believes you. 'And the front desk there will print that form in thirty seconds. But they staple it to a photocopy of your ID. No card, no copy, no form.' The whole thing hinges on one piece of plastic you don't have.";
+            }
+            return base + " You have neither, and the shelter won't issue the form without an ID on file. Every door in this building leads back to the same missing card.";
+        },
         effects: { hunger: -15, mentalFortitude: -25, timePassed: 3, flags: { intake_attempted: true } },
         choices: [
             { text: "Argue your case and demand to speak to a supervisor.", nextScenario: "caseworker_confrontation", requires: { mentalFortitude: 40 } },
             { text: "Leave the office. Walk to the library to research how to order a replacement ID online.", nextScenario: "library_research", effects: { cash: 0 } }
+        ]
+    },
+    {
+        // Closure for the assessment thread: once the ID exists, the impossible
+        // form becomes a formality — and the payoff is a waiting list, because
+        // the assessment was never the way out. The lease you save for is.
+        id: "intake_return",
+        notRandom: false,
+        category: 'quest',
+        weight: 2,
+        condition: () => state.hasID && state.flags.intake_attempted && !state.flags.intake_completed && state.timeHour >= 9 && state.timeHour <= 16,
+        text: "The housing office again — same three miles, same plastic chairs. But this time the shelter's front desk printed the verification form before you finished your coffee: thirty seconds of photocopying, now that there's a card to copy. The caseworker staples it all together and types for a long time. 'You're assessed. You're in the system.' She hesitates, the way people do before the second half of a sentence. 'The list for placement is running eighteen months to three years. Keep your address current with us.' A year and a half. But for the first time, a piece of paper in this building has your name spelled right on it.",
+        effects: { mentalFortitude: 10, timePassed: 2, flags: { intake_completed: true } },
+        choices: [
+            { text: "Take your copy and step back out. The list is long — your plans stay yours.", nextScenario: null }
         ]
     },
     {
@@ -1301,20 +1345,22 @@ const scenarios = [
         notRandom: true,
         text: () => {
             let t = "Sycamore and 4th. The branch library's stone steps on one side of the street, the Hopewell Day Center's hand-painted sign directly across. Half of everything the system wants from you — an address, a computer, a mail slot — lives on this one corner.";
-            if (state.timeHour > 16) t += " The day center's windows are dark; the mail window keeps nine-to-four hours.";
+            if (state.timeHour > 16) t += " The day center's windows are dark; the mail window keeps eight-to-four hours.";
             return t;
         },
         choices: [
             {
                 text: "Cross to Hopewell and ask about the mail service.",
-                hidden: () => !(state.mode === 'goal' && !state.flags.hasMailingAddress && state.timeHour >= 9 && state.timeHour <= 16),
+                hidden: () => !(state.mode === 'goal' && !state.flags.hasMailingAddress && state.timeHour >= 8 && state.timeHour <= 16),
                 effects: { timePassed: 0.1 },
                 nextScenario: 'day_center'
             },
             {
                 text: "Check Hopewell's mail bin for your name.",
-                hidden: () => !(state.mode === 'goal' && state.flags.hasMailingAddress && state.timeHour >= 9 && state.timeHour <= 16
-                    && ((state.flags.birthCertOrdered && !state.flags.hasBirthCert) || (state.flags.idOrdered && !state.flags.idViaMotel && !state.hasID))),
+                // Standing errand until the ID is in hand: an empty bin that names
+                // your next step beats an option that only appears once the engine
+                // already knows something is waiting
+                hidden: () => !(state.mode === 'goal' && state.flags.hasMailingAddress && !state.hasID && state.timeHour >= 8 && state.timeHour <= 16),
                 customAction: () => {
                     if (state.flags.birthCertOrdered && !state.flags.hasBirthCert && state.day >= (state.flags.birthCertArrivesDay || 0)) {
                         loadScenario('mail_arrives');
@@ -1333,13 +1379,13 @@ const scenarios = [
             },
             {
                 text: "Introduce yourself at the caseworker's table inside Hopewell.",
-                hidden: () => !(state.mode === 'goal' && state.flags.hasMailingAddress && !state.flags.metPamela && state.timeHour >= 9 && state.timeHour <= 16),
+                hidden: () => !(state.mode === 'goal' && state.flags.hasMailingAddress && !state.flags.metPamela && state.timeHour >= 8 && state.timeHour <= 16),
                 effects: { timePassed: 0.1 },
                 nextScenario: 'meet_pamela'
             },
             {
                 text: "Check in with Pamela at her table.",
-                hidden: () => !(state.mode === 'goal' && state.flags.metPamela && state.timeHour >= 9 && state.timeHour <= 16),
+                hidden: () => !(state.mode === 'goal' && state.flags.metPamela && state.timeHour >= 8 && state.timeHour <= 16),
                 effects: { timePassed: 0.1 },
                 nextScenario: 'pamela_checkin'
             },
@@ -1353,15 +1399,37 @@ const scenarios = [
         notRandom: true,
         text: () => {
             // Only one piece of state mail can be in flight at a time: the ID
-            // can't be ordered until the birth certificate is in hand
-            const pendingDay = (state.flags.birthCertOrdered && !state.flags.hasBirthCert)
-                ? (state.flags.birthCertArrivesDay || 0)
-                : (state.flags.idArrivesDay || 0);
-            const wait = Math.max(1, pendingDay - state.day);
-            return "The volunteer works through the plastic bin twice, then shakes her head. 'Nothing with your name on it today. State mail comes when it comes — give it another " + (wait === 1 ? "day" : wait + " days") + ", maybe.'";
+            // can't be ordered until the birth certificate is in hand. With the
+            // bin now a standing errand, an empty check has to say what's next.
+            const certPending = state.flags.birthCertOrdered && !state.flags.hasBirthCert;
+            const idPendingHere = state.flags.idOrdered && !state.flags.idViaMotel && !state.hasID;
+            if (certPending || idPendingHere) {
+                const pendingDay = certPending ? (state.flags.birthCertArrivesDay || 0) : (state.flags.idArrivesDay || 0);
+                const wait = Math.max(1, pendingDay - state.day);
+                return "The volunteer works through the plastic bin twice, then shakes her head. 'Nothing with your name on it today. State mail comes when it comes — give it another " + (wait === 1 ? "day" : wait + " days") + ", maybe.'";
+            }
+            if (state.flags.idOrdered && state.flags.idViaMotel && !state.hasID) {
+                if (state.day >= (state.flags.idArrivesDay || 0)) {
+                    return "The volunteer checks the bin out of politeness, but you both know the answer: you had the DMV send the card to the motel's street address. 'By my count that envelope's already landed, hon. It's sitting at your motel's front desk right now. Go ask.'";
+                }
+                const wait = Math.max(1, (state.flags.idArrivesDay || 0) - state.day);
+                return "The volunteer checks the bin out of politeness, but you both know the answer: you had the DMV send the card to the motel's street address. 'That envelope was never coming here, hon. Watch your front desk — give it another " + (wait === 1 ? "day" : wait + " days") + ".'";
+            }
+            if (state.flags.hasBirthCert) {
+                return "The volunteer doesn't even reach for the bin. 'Nothing's coming, hon — nothing's been filed. You've got the birth certificate in hand; the DMV is the next window. The state only writes back after you give it a reason to.'";
+            }
+            return "The volunteer flips through the bin anyway, but you both already know. 'Nothing under your name — and nothing will be until you order something. The library computers are right across the street. The birth certificate is where the paper trail starts.'";
         },
         effects: { mentalFortitude: -2, timePassed: 0.3 },
         choices: [
+            {
+                // The volunteer's redirect has to be walkable, not just narrated —
+                // this is the deliberate pickup for a motel-routed card
+                text: "Walk to the motel and ask at the front desk (30 min).",
+                hidden: () => !(state.flags.idOrdered && state.flags.idViaMotel && !state.hasID && state.day >= (state.flags.idArrivesDay || 0)),
+                effects: { timePassed: 0.5 },
+                nextScenario: 'id_arrives'
+            },
             { text: "Cross back to the library.", nextScenario: 'hopewell_block' },
             { text: "Head out.", nextScenario: null }
         ]
@@ -1374,7 +1442,7 @@ const scenarios = [
         notRandom: false,
         category: 'quest',
         weight: 3,
-        condition: () => state.mode === 'goal' && state.flags.hasMailingAddress && !state.flags.metPamela && state.timeHour >= 9 && state.timeHour <= 16,
+        condition: () => state.mode === 'goal' && state.flags.hasMailingAddress && !state.flags.metPamela && state.timeHour >= 8 && state.timeHour <= 16,
         text: "The volunteer at Hopewell nods you toward the back of the room, where an older woman with silver hair and reading glasses on a chain holds down a card table stacked with intake folders. 'Pamela. Casework — such as it is.' She looks at you the way nobody at a service window ever has: straight on, unhurried. 'I did three years outside myself, most of it within ten blocks of this table. So skip the version you tell the intake forms. Tell me where you're actually at.'",
         effects: { warmth: 5, timePassed: 0.2, flags: { metPamela: true } },
         choices: [
@@ -1554,7 +1622,7 @@ const scenarios = [
         notRandom: false,
         category: 'quest',
         weight: 3,
-        condition: () => state.mode === 'goal' && !state.flags.hasMailingAddress && state.timeHour >= 9 && state.timeHour <= 16,
+        condition: () => state.mode === 'goal' && !state.flags.hasMailingAddress && state.timeHour >= 8 && state.timeHour <= 16,
         text: "You pass the Hopewell Day Center — a squat brick building with a hand-painted sign, directly across the street from the branch library. Inside there's coffee, a bathroom, and a volunteer at a folding table. She mentions they run a free mail service: you can use the center's address to receive letters, no questions asked.",
         effects: { warmth: 5, timePassed: 0.2 },
         choices: [
@@ -1604,7 +1672,7 @@ const scenarios = [
         notRandom: false,
         category: 'quest',
         weight: 4,
-        condition: () => state.mode === 'goal' && state.flags.birthCertOrdered && !state.flags.hasBirthCert && state.day >= state.flags.birthCertArrivesDay && state.timeHour >= 9 && state.timeHour <= 16,
+        condition: () => state.mode === 'goal' && state.flags.birthCertOrdered && !state.flags.hasBirthCert && state.day >= state.flags.birthCertArrivesDay && state.timeHour >= 8 && state.timeHour <= 16,
         text: "You stop by the Hopewell Day Center to check the mail. The volunteer flips through a plastic bin and smiles as she hands you a stiff envelope from the state records office. Your birth certificate. Proof that you exist.",
         effects: { mentalFortitude: 20, timePassed: 0.5, flags: { hasBirthCert: true } },
         choices: [ { text: "Tuck it somewhere safe. Next stop: the DMV.", nextScenario: null } ]
@@ -1658,7 +1726,7 @@ const scenarios = [
         notRandom: false,
         category: 'quest',
         weight: 4,
-        condition: () => state.mode === 'goal' && state.flags.idOrdered && !state.hasID && state.day >= (state.flags.idArrivesDay || 0) && state.timeHour >= 9 && state.timeHour <= 16,
+        condition: () => state.mode === 'goal' && state.flags.idOrdered && !state.hasID && state.day >= (state.flags.idArrivesDay || 0) && state.timeHour >= 8 && state.timeHour <= 16,
         text: () => (state.flags.idViaMotel
                 ? "The motel clerk flags you down on your way past the office and holds up a stiff government envelope with your name on it."
                 : "You stop by the Hopewell Day Center to check the mail, and the volunteer hands you a stiff government envelope from the DMV.") +
@@ -2520,7 +2588,7 @@ const scenarios = [
         text: "You use a public computer for 30 minutes. You learn that a replacement ID requires a birth certificate, which costs $25 to order with expedited processing. You also need a mailing address. It feels impossible — until you spot a flyer taped to the monitor: the Hopewell Day Center offers a free mail service for people without an address. The address on the flyer is directly across the street from this library.",
         effects: { mentalFortitude: -10, timePassed: 1 },
         choices: [
-            { text: "Log off and cross the street while they're open.", hidden: () => !(state.mode === 'goal' && !state.flags.hasMailingAddress && state.timeHour >= 9 && state.timeHour <= 16), effects: { timePassed: 0.1 }, nextScenario: 'day_center' },
+            { text: "Log off and cross the street while they're open.", hidden: () => !(state.mode === 'goal' && !state.flags.hasMailingAddress && state.timeHour >= 8 && state.timeHour <= 16), effects: { timePassed: 0.1 }, nextScenario: 'day_center' },
             { text: "Log off. Maybe there's a way after all.", nextScenario: null }
         ]
     },
