@@ -1,6 +1,6 @@
 // Build version, shown on the title screen (initTitleScreen). Scheme 1.0.x.y:
 // bump x for a gameplay/content feature, y for a fix or tuning pass.
-const GAME_VERSION = '1.0.20.0';
+const GAME_VERSION = '1.0.21.0';
 
 // Winning means signing a lease: first month, deposit, and the application
 // fees nobody warns you about. Referenced by checkGameStatus and the sidebar
@@ -51,6 +51,12 @@ let state = {
         // cash and hours — never papers, never quest progress
         metPaul: false,
         transitPasses: 0,
+        // Speedy: Paul is desperation with a script; Speedy is what's left when
+        // the addiction does the driving. Same hard rule as Paul — he only ever
+        // costs cash, food, and hours, never papers or quest progress. Ray's
+        // warning is the counter-scam: the network defends you from him.
+        metSpeedy: false,
+        speedyWarned: false,
         // The bank: pocket cash is what a thief can reach; the checking balance
         // is what they can't. Opens with the ID — the system protects the documented
         hasBankAccount: false,
@@ -2771,6 +2777,261 @@ const scenarios = [
             { text: "Stay for the show.", effects: { mentalFortitude: 4, timePassed: 0.5 }, nextScenario: null },
             { text: "Trade a line and keep moving.", effects: { mentalFortitude: 2, timePassed: 0.1 }, nextScenario: null }
         ]
+    },
+    // Speedy: the block's cautionary tale. Where Paul is desperation running a
+    // script, Speedy is what's left when the pipe and the bottle hold the wheel —
+    // friendly in under a minute, lying by the second, and blaming somebody else
+    // the instant he's caught. The street's answer to him is Ray's warning, and
+    // the only kindness that works is a welfare check from a safe distance.
+    // Hard rule, same as Paul: cash, food, and hours only — never papers.
+    {
+        id: 'ray_speedy_warning',
+        notRandom: false,
+        category: 'encounter',
+        weight: 2,
+        condition: () => state.flags.metRay && !state.flags.speedyWarned && state.timeHour >= 8 && state.timeHour <= 20,
+        text: () => {
+            const opener = state.flags.metSpeedy
+                ? "Ray waves you over, and for once he leads with it instead of the pigeons. 'Saw who had hold of your hand the other day,' he says, in the tone of a man mentioning a downed power line. 'So we're doing this talk now instead of later.'"
+                : "Ray waves you over and skips the pigeons entirely, which means business. 'One more thing for the map, since you're new enough to be worth the breath,' he says.";
+            return opener + " 'Skinny guy works this side of the boulevard. Calls himself Speedy. Calls everybody brother. Fast hands, faster story — he'll be your best friend inside a minute, and the friendship costs whatever's in the pocket he's standing closest to. Whatever he tells you, somebody else did it. Whatever he asks you, the answer's no.' Ray lets that sit, then adds the part he actually flagged you down for: 'It's not meanness in him. It's the pipe, and the pipe's been driving for years. There's no version of helping that man up close that ends with you whole. You see him down someplace — and you will — you call the non-emergency line and ask them to send a check on him. That's the whole kindness there is left to do him. The rest is just him getting a hand into your coat.'";
+        },
+        effects: { flags: { speedyWarned: true }, timePassed: 0.3 },
+        choices: [
+            { text: "Ask what happened to him.", effects: { timePassed: 0.3 }, nextScenario: 'ray_speedy_history' },
+            { text: "File it with the rest of the map.", effects: { timePassed: 0.1 }, nextScenario: null }
+        ]
+    },
+    {
+        id: 'ray_speedy_history',
+        notRandom: true,
+        text: "'Hung drywall,' Ray says. 'Had a van with his name on the door — his actual name, which nobody out here has used in years.' The rest comes the way Ray reads out a totaled engine: no judgment, no softening. The trade went, then the van, then the stretches between benders got shorter than the benders, and the street got what was left. 'I kept sandwiches in him for a winter, back when I still thought it was a food problem. He stole my boots while I slept. In January.' Ray looks at his own feet a second. 'That's not a man deciding things anymore. That's why you call the number instead of getting close. You're not calling it on him. You're calling it for him.'",
+        choices: [ { text: "Ask nothing else.", nextScenario: null } ]
+    },
+    {
+        id: 'speedy_first_meeting',
+        notRandom: false,
+        category: 'encounter',
+        weight: 2,
+        condition: () => !state.flags.metSpeedy && state.timeHour >= 9 && state.timeHour <= 21,
+        onLoad: () => { state.flags.lastSpeedyDay = state.day; },
+        text: "He comes off the wall by the check-cashing place like you're the one face he's been waiting on all day — 'BROTHER!' — a wiry guy, forty going on wrecked, closing the distance in a fast shuffle that never quite becomes a walk. He's got your hand before you offered it and your name out of you before you decided to give it, and now he's using the name in every sentence like he's wearing it in. He smells like a package store. He stands too close. And his free hand keeps doing something friendly — your shoulder, your sleeve, the strap of your pack — landing everywhere, staying nowhere. Everybody calls him Speedy, he says. Ask anybody. This is his block, and any friend of the block is a friend of his.",
+        effects: { flags: { metSpeedy: true }, timePassed: 0.1 },
+        choices: [
+            {
+                text: "This is the one Ray flagged. Short answers, hands on your straps.",
+                hidden: () => !state.flags.speedyWarned,
+                effects: { timePassed: 0.2 },
+                nextScenario: 'speedy_sized_up'
+            },
+            {
+                text: "He's friendly enough. Talk a while.",
+                customAction: () => {
+                    const lifted = Math.min(state.cash, 12);
+                    state.flags._speedyLifted = lifted;
+                    if (lifted > 0) {
+                        applyEffects({ cash: -lifted, mentalFortitude: -5, timePassed: 0.5 });
+                        loadScenario('speedy_first_lift');
+                    } else {
+                        applyEffects({ mentalFortitude: -2, timePassed: 0.5 });
+                        loadScenario('speedy_nothing_worth');
+                    }
+                }
+            },
+            { text: "Peel him off and keep moving.", effects: { mentalFortitude: -1, timePassed: 0.2 }, nextScenario: 'speedy_shaken_off' }
+        ]
+    },
+    {
+        id: 'speedy_sized_up',
+        notRandom: true,
+        text: "You go polite and boring: thumbs hooked under both straps, answers of one word, feet already angled up the block. He reads it in about four seconds — friendliness this fast is a working tool, and a tool knows when it isn't cutting. Mid-sentence about a guy who owes him, he simply evaporates toward a pair of students coming out of the check-cashing place, brother already loaded for the next handshake. Ray's warning did its work before it needed saying out loud. That's what the map is for.",
+        choices: [ { text: "Keep your hands where they are and go.", nextScenario: null } ]
+    },
+    {
+        id: 'speedy_first_lift',
+        notRandom: true,
+        text: () => "He talks for half an hour and it's genuinely not boring — the block, the characters on it, a story about a security guard and a raccoon that can't possibly be true and is perfectly told anyway. He laughs at your jokes before they're finished. It's three blocks later, reaching for coffee money, that your hand finds the pocket. $" + (state.flags._speedyLifted || 0).toFixed(2) + ", gone — lifted mid-laugh by the same friendly hand that kept landing on your shoulder. That's what the landing was for. The friendship was the tool, and you were the job, and the worst part is how good he was at making the job feel like company.",
+        choices: [ { text: "Count what's left. Learn the lesson at the price offered.", nextScenario: null } ]
+    },
+    {
+        id: 'speedy_nothing_worth',
+        notRandom: true,
+        text: "He talks, and his free hand wanders, and somewhere in the middle of a story about a security guard and a raccoon you watch the interest leave him — the wattage just drops, mid-sentence, brother cooling to man cooling to nothing at all. The wandering hand found your pockets empty and reported back. Thirty seconds later he's gone toward the check-cashing line without a goodbye, already warming up the handshake. It's flattering in reverse: broke, you're invisible to him. It's also the safest you will ever be around Speedy.",
+        choices: [ { text: "Move along, worth nothing, safe because of it.", nextScenario: null } ]
+    },
+    {
+        id: 'speedy_shaken_off',
+        notRandom: true,
+        text: "Getting loose of Speedy is a physical act, like getting out of a coat with your hands full. He holds the handshake a beat past done, walks the first ten steps with you, pitches two more openings at your back — 'you good though? you need anything?' — offering, always offering, because the offer is how the hand stays close. When you don't slow down he peels off without ceremony. Half a block later you check your pockets anyway. Everything's there. You check them again at the corner.",
+        choices: [ { text: "Keep the stride.", nextScenario: null } ]
+    },
+    {
+        id: 'speedy_bag_watch',
+        notRandom: false,
+        category: 'encounter',
+        condition: () => state.flags.metSpeedy && !state.flags.speedyBagDone && state.flags.lastSpeedyDay !== state.day && state.foodStash >= 1 && state.timeHour >= 9 && state.timeHour <= 17,
+        onLoad: () => { state.flags.lastSpeedyDay = state.day; },
+        text: "Speedy materializes at your elbow outside the day center doors, radiating helpfulness. New rule, he tells you, no bags inside anymore, they'll bounce you right at the desk — happened to a guy this morning, ugly scene — but he's got you, brother. He'll sit right here on the rail and watch it. Right here. Won't move a muscle. His eyes have already done a full inventory of the pack, and they keep returning to the side pocket where the wax paper of a packed meal shows through the mesh.",
+        effects: { flags: { speedyBagDone: true }, timePassed: 0.1 },
+        choices: [
+            { text: "Leave the pack with him. He's standing right there.", effects: { timePassed: 0.3 }, nextScenario: 'speedy_caught_blaming' },
+            { text: "There's no bag rule. There's never been a bag rule.", effects: { timePassed: 0.1 }, nextScenario: 'speedy_bag_declined' }
+        ]
+    },
+    {
+        id: 'speedy_caught_blaming',
+        notRandom: true,
+        text: "The woman at the desk waves you through without a glance at anything — there is no bag rule; there never was — so you're back out the door inside a minute, fast enough to catch Speedy with his arm in your side pocket to the elbow, your packed meal already halfway into his coat. What happens in his face is remarkable. Not guilt. Not even the freeze of the caught. Outrage — instant, total, aimed past you: 'Some KID was in it!' He's pointing down a sidewalk with nobody on it. 'Little dude, gray hoodie — I chased him OFF, I was checking what he GOT, you're lucky I was HERE, man—' The story arrives fully built, load-bearing, ready for occupancy. He believes it. Or something in him is steering that does.",
+        choices: [
+            { text: "Take it out of his hand. 'The kid with your arm, Speedy?'", effects: { mentalFortitude: -4, timePassed: 0.2 }, nextScenario: 'speedy_pressed' },
+            {
+                text: "Let it ride. The meal's gone; the argument doesn't have to happen.",
+                customAction: () => {
+                    applyEffects({ foodStash: -1, mentalFortitude: -3, timePassed: 0.1 });
+                    loadScenario('speedy_let_go');
+                }
+            }
+        ]
+    },
+    {
+        id: 'speedy_pressed',
+        notRandom: true,
+        text: "He surrenders the meal the way a man concedes a point in an argument he intends to keep having — aggrieved, wounded, somehow magnanimous about it. 'That's what I get. That's what I GET for looking out for people.' He's still narrating the injustice to the rail, to the door, to a pigeon, as you go through the pack on the steps. Every zipper is open. Nothing else is missing, probably because nothing else had time to be. You count it all twice while he watches you count, visibly offended by the counting.",
+        choices: [ { text: "Shoulder the pack. It rides in front now.", nextScenario: null } ]
+    },
+    {
+        id: 'speedy_let_go',
+        notRandom: true,
+        text: "You let him keep the play. He blesses you for it — actually blesses you, 'God bless, brother, I'm GLAD I was here' — and your meal disappears into his coat with the fiction riding along intact, kid in the gray hoodie and all. He'll tell that story tonight to whoever's around, and by the third telling he'll have fought the kid. Cheap, as tuition goes: one sandwich, and now you know exactly what every friendly offer from Speedy weighs. Ray's rate card was accurate to the dollar.",
+        choices: [ { text: "Walk it off.", nextScenario: null } ]
+    },
+    {
+        id: 'speedy_bag_declined',
+        notRandom: true,
+        text: "'They CHANGED it,' he insists, but his heart's not in the appeal — the mark made the mark's saving throw, no hard feelings, that's the game. By the time you reach the door he's already drifted down the rail toward a woman wrestling a duffel and a toddler, helpfulness recharging as he goes. Inside, the desk doesn't so much as look at your pack. You knew that. The useful part is that now you've watched him work from the outside, and the whole machine of him is visible: the rule that doesn't exist, the favor nobody asked for, the hand it puts him next to.",
+        choices: [ { text: "Get on with what you came for.", nextScenario: null } ]
+    },
+    {
+        id: 'speedy_tale',
+        notRandom: false,
+        category: 'encounter',
+        condition: () => state.flags.metSpeedy && state.flags.metRay && state.day >= (state.flags.nextSpeedyTaleDay || 0) && state.flags.lastSpeedyDay !== state.day && state.timeHour >= 9 && state.timeHour <= 19,
+        onLoad: () => { state.flags.nextSpeedyTaleDay = state.day + 4; state.flags.lastSpeedyDay = state.day; },
+        text: "Speedy arrives at a trot, bringing urgency with him like weather. Today's story has Ray in it. Ray's short for his blood-pressure pills — Ray, of all people — too proud to come ask you himself, you know how Ray is, and he told Speedy to catch you before the pharmacy closes. Ten dollars. He's just the messenger. He is LITERALLY just the messenger, and every fourth word out of him is Ray, the name doing the work his own hasn't done in years. It's a good story. Urgent, specific, aimed at the exact soft spot where your people are. It has one flaw, and the flaw is that Ray, in twenty-two years on this block, has never once sent a messenger.",
+        effects: { timePassed: 0.1 },
+        choices: [
+            { text: "Send the ten, in case this is the one true one ($10.00).", requires: { cash: 10.00 }, effects: { cash: -10.00, mentalFortitude: -6, timePassed: 0.75 }, nextScenario: 'speedy_tale_paid' },
+            { text: "'Ray doesn't send messengers.' Watch the story die.", effects: { mentalFortitude: -2, timePassed: 0.2 }, nextScenario: 'speedy_tale_called' }
+        ]
+    },
+    {
+        id: 'speedy_tale_paid',
+        notRandom: true,
+        text: "You pass Ray's crate not an hour later. He's fine. He's better than fine — he's mid-lecture to a pigeon about territorial overreach. When you mention the pills, his face does something you've never seen it do, which is go perfectly still. 'What did you give him?' You tell him. Ray nods once, the way he'd nod at a weather report, and looks down the boulevard in the direction all ten dollars in this neighborhood eventually flow. 'That's the last dollar he gets easy off my name,' he says, mostly to himself. He doesn't say told you. Twenty-two years out here and the man has never once needed to.",
+        choices: [ { text: "Add it to the tuition.", nextScenario: null } ]
+    },
+    {
+        id: 'speedy_tale_called',
+        notRandom: true,
+        text: "The pivot is seamless. Nothing lands anywhere in him that looks like shame — it converts straight to grievance, at volume, for the benefit of the whole block: he is out here trying to help a SICK MAN, a sick OLD man, and this is what he gets, and everybody's going to hear how you are, EVERYBODY. He's already walking. Already scanning. The outrage is a coat he'll take off around the corner and hang up for next time. A woman at the bus stop catches your eye and gives you a small nod, one taxpayer to another: called that one right.",
+        choices: [ { text: "Let the performance leave without you.", nextScenario: null } ]
+    },
+    {
+        id: 'speedy_down',
+        notRandom: false,
+        category: 'encounter',
+        condition: () => (state.flags.metSpeedy || state.flags.speedyWarned) && state.day >= (state.flags.nextSpeedyDownDay || 0) && state.flags.lastSpeedyDay !== state.day && state.timeHour >= 8 && state.timeHour <= 20,
+        onLoad: () => { state.flags.nextSpeedyDownDay = state.day + 7; state.flags.lastSpeedyDay = state.day; },
+        text: () => {
+            const who = state.flags.metSpeedy
+                ? "Speedy is down in the doorway of the shuttered rent-to-own place"
+                : "The man down in the doorway of the shuttered rent-to-own place matches Ray's description to the letter — the one to keep clear of";
+            let t = who + " — folded wrong, one shoe half off, a bottle standing guard beside him. Not sleeping. Sleeping doesn't look like that. The color is wrong and the breathing has long gaps in it, and the block flows around him in a practiced arc, the way it has flowed around him for years, because everyone here has already paid whatever getting close to Speedy costs.";
+            if (state.flags.speedyWarned) t += " Ray's voice arrives without being asked for: you see him down, you call somebody whose job it is.";
+            return t;
+        },
+        effects: { timePassed: 0.1 },
+        choices: [
+            {
+                text: "Call the non-emergency line. Ask for a welfare check.",
+                hidden: () => !phoneActive(),
+                customAction: () => {
+                    state.flags.streetRep = (state.flags.streetRep || 0) + 1;
+                    applyEffects({ mentalFortitude: 4, timePassed: 0.75 });
+                    loadScenario('speedy_checked_on');
+                }
+            },
+            {
+                text: "Get the counter guy at the mini-mart to call it in.",
+                customAction: () => {
+                    state.flags.streetRep = (state.flags.streetRep || 0) + 1;
+                    applyEffects({ mentalFortitude: 3, timePassed: 1 });
+                    loadScenario('speedy_checked_on');
+                }
+            },
+            {
+                text: "Get him up yourself. He's a person, whatever else he is.",
+                customAction: () => {
+                    const lifted = Math.min(state.cash, 10);
+                    state.flags._speedyLifted = lifted;
+                    applyEffects({ cash: -lifted, mentalFortitude: -4, timePassed: 0.5 });
+                    loadScenario('speedy_grab');
+                }
+            },
+            { text: "Keep walking. This block handles Speedy by not handling him.", effects: { mentalFortitude: -2, timePassed: 0.1 }, nextScenario: 'speedy_walked_past' }
+        ]
+    },
+    {
+        id: 'speedy_checked_on',
+        notRandom: true,
+        text: "The patrol car and the ambulance arrive in that order, no lights, no hurry — a run they have made before. The officer says Speedy's actual name twice, like a password, and gets a paramedic gloved up before touching him. Speedy surfaces swearing, and inside a minute he has established that the paramedics stole his bottle, that this officer has ALWAYS had it out for him, and that whoever called this in — his eyes sweep the sidewalk and slide over you with no recognition at all — is the reason he can't have anything. They load him anyway, patient as furniture movers. He'll be back on this block inside two days. But he'll be back alive, which tonight was not otherwise guaranteed, and it cost you one phone call and none of your skin. There's a kindness that only works at exactly one distance. Ray had the distance measured.",
+        choices: [ { text: "Watch them pull out, then go.", nextScenario: null } ]
+    },
+    {
+        id: 'speedy_grab',
+        notRandom: true,
+        text: () => {
+            let t = "You get a hand under his arm and he surfaces all at once, fast and wrong, grabbing — sleeve, collar, coat pocket — a drowning man climbing whatever's closest, and what's closest is you. By the time you're loose he's upright against the doorframe, swearing at you for shoving him, aggrieved before his eyes are even focusing.";
+            const lifted = state.flags._speedyLifted || 0;
+            t += lifted > 0
+                ? " It's not until the corner that your hand finds the pocket he was climbing and comes up empty. $" + lifted.toFixed(2) + ", gone somewhere between the ground and his feet — which, half-conscious, still knew their business."
+                : " There was nothing in your pockets for the climbing hands to find, which is the only reason this ended even.";
+            if (state.flags.speedyWarned) t += " Ray told you this exact story before it happened to you. It's the kind of being right he'd enjoy least.";
+            return t;
+        },
+        choices: [ { text: "Put the block behind you.", nextScenario: null } ]
+    },
+    {
+        id: 'speedy_walked_past',
+        notRandom: true,
+        text: "You keep walking, the way the block keeps walking, joining an arc worn smooth by everyone who came to the same conclusion before you. Ray would sign off on it — there's no version of close-up help that ends with you whole — but Ray's arithmetic never claimed the walking would feel like nothing. Half a block on, you're still listening backward for the breathing. There was a number you could have asked somebody to call. It stays with you longer than the ten dollars would have.",
+        choices: [ { text: "Keep going.", nextScenario: null } ]
+    },
+    {
+        id: 'speedy_working',
+        notRandom: false,
+        category: 'encounter',
+        condition: () => state.flags.metSpeedy && state.flags.lastSpeedyDay !== state.day && state.timeHour >= 10 && state.timeHour <= 20,
+        onLoad: () => { state.flags.lastSpeedyDay = state.day; },
+        text: "Down the block, Speedy is being somebody's best friend. You can read the whole grammar of it from here, now that you speak the language: the handshake that starts before it's offered, the free hand landing everywhere and staying nowhere — shoulder, sleeve, strap — the laugh arriving a half-second early. The mark is a young guy with a duffel, week one on this street written all over him, carrying his entire situation in a side pocket the way you used to.",
+        effects: { timePassed: 0.1 },
+        choices: [
+            {
+                text: "Drift over and flank the new guy. 'Got a second? It's about your bag.'",
+                customAction: () => {
+                    state.flags.streetRep = (state.flags.streetRep || 0) + 1;
+                    applyEffects({ mentalFortitude: 3, timePassed: 0.3 });
+                    loadScenario('speedy_mark_warned');
+                }
+            },
+            { text: "Not your block to police. Keep moving.", effects: { mentalFortitude: -2, timePassed: 0.1 }, nextScenario: null }
+        ]
+    },
+    {
+        id: 'speedy_mark_warned',
+        notRandom: true,
+        text: "You do it the way Ray did it for you — no drama, no accusation, just close enough to be heard and a few plain sentences about pockets and this particular brother. The kid's hand goes to his side pocket and finds the zipper already worked half open, and his face completes the entire education in one second flat. Speedy doesn't even contest the facts. 'THIS guy,' he announces to the street at large, 'goes around POISONING people against—' and then he's already moving, grievance packed for travel, scanning the next block for the next handshake. The kid thanks you twice. Somewhere behind you, Ray is nodding at a pigeon. The map only works if it keeps getting passed along.",
+        choices: [ { text: "Tell him where the day center is while you're at it.", nextScenario: null } ]
     },
     // Placeholder transition scenarios
     {
