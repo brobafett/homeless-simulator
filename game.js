@@ -1785,7 +1785,24 @@ const scenarios = [
         condition: () => state.mode === 'goal' && state.flags.birthCertOrdered && !state.flags.hasBirthCert && state.day >= state.flags.birthCertArrivesDay && state.timeHour >= 8 && state.timeHour <= 16,
         text: "You stop by the Hopewell Day Center to check the mail. The volunteer flips through a plastic bin and smiles as she hands you a stiff envelope from the state records office. Your birth certificate. Proof that you exist.",
         effects: { mentalFortitude: 20, timePassed: 0.5, flags: { hasBirthCert: true } },
-        choices: [ { text: "Tuck it somewhere safe. Next stop: the DMV.", nextScenario: null } ]
+        choices: [ { text: "Tuck it somewhere safe. Next stop: the DMV.",
+            then: { scenarioId: 'dmv_travel', window: () => state.timeHour >= 9 && state.timeHour <= 15 } } ]
+    },
+    {
+        // Continuation stub: the decision about whether and how to get to the
+        // DMV, not the DMV itself. Walk cost rides timePassed so timeModifier
+        // already prices in encumbrance — no hand-rolled penalty.
+        id: 'dmv_travel',
+        notRandom: true,
+        text: "The DMV is across town, and the certificate is burning a hole in your pocket.", // TODO: copy
+        choices: [
+            { text: "Walk it.", effects: { timePassed: 0.75, warmth: -8, hunger: -8 }, nextScenario: 'dmv_visit' },
+            { text: "Take the bus ($2.75).", requires: { cash: 2.75 },
+              effects: { cash: -2.75, timePassed: 0.25 }, nextScenario: 'dmv_visit' },
+            { text: "Use a transit pass.", requires: { flag: 'transitPasses', flagLabel: '(No passes)' },
+              customAction: () => { state.flags.transitPasses--; applyEffects({ timePassed: 0.25 }); loadScenario('dmv_visit'); } },
+            { text: "Not today.", nextScenario: null }
+        ]
     },
     {
         id: 'dmv_visit',
@@ -1842,7 +1859,25 @@ const scenarios = [
                 : "You stop by the Hopewell Day Center to check the mail, and the volunteer hands you a stiff government envelope from the DMV.") +
             " Inside: a laminated card, your own face looking back at you. You exist again, officially. Doors that were closed — shelters, clinics, real jobs, housing — just cracked open.",
         effects: { mentalFortitude: 20, timePassed: 0.5, hasID: true },
-        choices: [ { text: "Step outside, standing a little taller.", nextScenario: null } ]
+        choices: [ { text: "Step outside, standing a little taller.",
+            // window: spec says 9-17; the !hasCleanClothes guard is added so the
+            // continuation never jumps into a closet the checklist no longer needs
+            then: { scenarioId: 'id_next_step', window: () => !state.hasCleanClothes && state.timeHour >= 9 && state.timeHour <= 17 } } ]
+    },
+    {
+        // Continuation stub: with the ID in hand, the last checklist item is
+        // interview clothes — this is the travel decision toward them.
+        id: 'id_next_step',
+        notRandom: true,
+        text: "The church clothing closet runs afternoons, and for once your paperwork is ahead of you.", // TODO: copy
+        choices: [
+            { text: "Walk it.", effects: { timePassed: 0.75, warmth: -8, hunger: -8 }, nextScenario: 'clothing_closet' },
+            { text: "Take the bus ($2.75).", requires: { cash: 2.75 },
+              effects: { cash: -2.75, timePassed: 0.25 }, nextScenario: 'clothing_closet' },
+            { text: "Use a transit pass.", requires: { flag: 'transitPasses', flagLabel: '(No passes)' },
+              customAction: () => { state.flags.transitPasses--; applyEffects({ timePassed: 0.25 }); loadScenario('clothing_closet'); } },
+            { text: "Not today.", nextScenario: null }
+        ]
     },
     {
         // The bank: what the ID buys beyond the win checklist. Every theft roll
@@ -1942,7 +1977,22 @@ const scenarios = [
         id: 'clothes_found',
         notRandom: true,
         text: "Clean jeans, a warm shirt, a jacket without holes. You change in a restroom and catch your reflection in the mirror. You look like someone a landlord might actually rent to.",
-        choices: [ { text: "Keep moving.", nextScenario: null } ]
+        choices: [ { text: "Keep moving.", then: { scenarioId: 'clothes_next_step' } } ]
+    },
+    {
+        // Continuation stub: the Hopewell block is the right next stop from any
+        // checklist state — day-center signup, the mail bin, or the bank walk.
+        id: 'clothes_next_step',
+        notRandom: true,
+        text: "Looking this presentable, the Hopewell block feels like the place to press the advantage.", // TODO: copy
+        choices: [
+            { text: "Walk it.", effects: { timePassed: 0.75, warmth: -8, hunger: -8 }, nextScenario: 'hopewell_block' },
+            { text: "Take the bus ($2.75).", requires: { cash: 2.75 },
+              effects: { cash: -2.75, timePassed: 0.25 }, nextScenario: 'hopewell_block' },
+            { text: "Use a transit pass.", requires: { flag: 'transitPasses', flagLabel: '(No passes)' },
+              customAction: () => { state.flags.transitPasses--; applyEffects({ timePassed: 0.25 }); loadScenario('hopewell_block'); } },
+            { text: "Not today.", nextScenario: null }
+        ]
     },
     // Gear upgrades and steady employment
     {
@@ -3188,6 +3238,13 @@ function makeChoice(choice) {
         choice.customAction();
     } else if (choice.nextScenario) {
         loadScenario(choice.nextScenario);
+    } else if (choice.then) {
+        // A quest step that continues rather than dissolving back into the pool.
+        // Guarded so a closed window (DMV after 15:00) falls through to the pool
+        // instead of jumping into a scenario whose own condition is false.
+        const target = scenarios.find(s => s.id === choice.then.scenarioId);
+        const open = target && (!choice.then.window || choice.then.window());
+        loadScenario(open ? choice.then.scenarioId : undefined);
     } else {
         loadScenario();
     }
