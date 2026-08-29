@@ -1,6 +1,6 @@
 // Build version, shown on the title screen (initTitleScreen). Scheme 1.0.x.y:
 // bump x for a gameplay/content feature, y for a fix or tuning pass.
-const GAME_VERSION = '1.0.21.0';
+const GAME_VERSION = '1.0.22.0';
 
 // Winning means signing a lease: first month, deposit, and the application
 // fees nobody warns you about. Referenced by checkGameStatus and the sidebar
@@ -22,6 +22,11 @@ let state = {
     maxWarmthCapacity: 100,
     timeModifier: 1.0,
     difficultyMultiplier: 1.0,
+    // Repeat suppression. seenToday is an array, not a Set: state is persisted
+    // wholesale via JSON.stringify in saveGame, and a Set serializes to {}.
+    seenToday: [],        // scenario ids already served today
+    recentSeen: [],       // scenario ids, most recent first, capped at 20
+    lastSeenDay: {},      // scenario id -> day it last fired
     hasID: false,
     hasCleanClothes: false,
     flags: {
@@ -93,6 +98,12 @@ function continueGame() {
     if (!saved || !saved.mode) return;
 
     Object.assign(state, saved); // merge over defaults so old saves survive new fields
+
+    // Old saves predate repeat suppression — normalize rather than trust the save
+    if (!Array.isArray(state.seenToday)) state.seenToday = [];
+    if (!Array.isArray(state.recentSeen)) state.recentSeen = [];
+    if (!state.lastSeenDay || typeof state.lastSeenDay !== 'object') state.lastSeenDay = {};
+
     recomputeTimeModifier();     // timeModifier is derived from flags, never trusted from the save
 
     document.getElementById('title-screen').style.display = 'none';
@@ -196,6 +207,7 @@ function checkGameStatus() {
 
 function advanceDay() {
     state.day++;
+    state.seenToday = []; // a new day re-opens everything the old one used up
     if ((state.flags.motelDaysRemaining || 0) > 0) state.flags.motelDaysRemaining--;
     if (state.mode === "endless") {
         state.difficultyMultiplier += 0.08; // Every day gets 8% harder
@@ -666,6 +678,9 @@ const scenarios = [
         notRandom: false,
         category: 'hazard',
         condition: () => state.timeHour >= 17 || state.timeHour <= 5,
+        // Stamped here, not in the forced branch, so an early random draw of the
+        // shelter prompt also satisfies the evening force
+        onLoad: () => { state.flags.lastShelterPromptDay = state.day; },
         text: "The light is fading and the temperature is dropping fast. You need to figure out where you're spending the night.",
         choices: [
             { text: "Bed down under the underpass for the night.", customAction: () => resolveRough('underpass') },
@@ -3178,6 +3193,27 @@ function makeChoice(choice) {
     }
 }
 
+// Days that must pass before a scenario is eligible again. Absent = no cooldown,
+// but same-day suppression still applies. Tuned against simulation: these values
+// cost ~5% of random daily income; do not raise them without re-measuring.
+const SCENARIO_COOLDOWN = {
+    bottle_return: 2,
+    job_day_labor: 1,
+    rainstorm_sudden: 2,
+    street_harassment: 2,
+    bakery_closing: 1,
+    library_refuge: 1,
+    public_transit: 2,
+    stray_dog: 3,
+    medical_clinic: 3,
+    gym_trial: 3,
+    lost_wallet: 6
+};
+
+// Scenarios that may legitimately fire more than once in a day. Everything else
+// is once-daily. Keep this list short — it is the exception, not the default.
+const REPEATABLE_SAME_DAY = new Set(['find_meal', 'idle_time', 'soup_kitchen']);
+
 // Category-weighted selection: roll a lane first, then a scenario within it.
 // A flat pool lets every new scenario dilute every old one — write three street
 // characters and suddenly the drywall truck never comes. Bucketing means new
@@ -3186,35 +3222,51 @@ function makeChoice(choice) {
 const CATEGORY_WEIGHTS = { work: 25, food: 20, encounter: 20, quest: 20, hazard: 15 };
 
 function pickRandomScenario() {
-    const buckets = {};
-    scenarios.forEach(s => {
-        if (s.notRandom) return;
-        if (s.condition && !s.condition()) return;
-        const cat = s.category || 'encounter';
-        (buckets[cat] = buckets[cat] || []).push(s);
-    });
+    // Three suppression tiers, relaxed in order if the board goes empty. Tier 0 is
+    // the intended behavior; 1 and 2 exist so a heavily-gated late-game state can
+    // never hand back null and fall through to the find_meal fallback.
+    for (let tier = 0; tier <= 2; tier++) {
+        const buckets = {};
+        scenarios.forEach(s => {
+            if (s.notRandom) return;
+            if (s.condition && !s.condition()) return;
 
-    // Empty buckets (quest chain finished, work closed for the night) never
-    // reach the roll — the weights renormalize over whoever's home
-    const cats = Object.keys(buckets);
-    if (cats.length === 0) return null;
+            // Tier 0-1: no scenario twice in one day (except the exempt few)
+            if (tier <= 1 && !REPEATABLE_SAME_DAY.has(s.id) && state.seenToday.includes(s.id)) return;
 
-    let total = 0;
-    cats.forEach(c => { total += CATEGORY_WEIGHTS[c] || 10; });
-    let roll = Math.random() * total;
-    let chosen = cats[cats.length - 1];
-    for (const c of cats) {
-        roll -= CATEGORY_WEIGHTS[c] || 10;
-        if (roll < 0) { chosen = c; break; }
+            // Tier 0 only: recency window and per-scenario cooldown
+            if (tier === 0) {
+                if (state.recentSeen.slice(0, 10).includes(s.id)) return;
+                const cd = SCENARIO_COOLDOWN[s.id] || 0;
+                const last = state.lastSeenDay[s.id];
+                if (cd && last !== undefined && state.day < last + cd) return;
+            }
+
+            const cat = s.category || 'encounter';
+            (buckets[cat] = buckets[cat] || []).push(s);
+        });
+
+        const cats = Object.keys(buckets);
+        if (cats.length === 0) continue; // relax and retry
+
+        let total = 0;
+        cats.forEach(c => { total += CATEGORY_WEIGHTS[c] || 10; });
+        let roll = Math.random() * total;
+        let chosen = cats[cats.length - 1];
+        for (const c of cats) {
+            roll -= CATEGORY_WEIGHTS[c] || 10;
+            if (roll < 0) { chosen = c; break; }
+        }
+
+        // Scenario weight still applies, but only against neighbors in the same lane
+        const pool = [];
+        buckets[chosen].forEach(s => {
+            const w = s.weight || 1;
+            for (let i = 0; i < w; i++) pool.push(s);
+        });
+        return pool[Math.floor(Math.random() * pool.length)];
     }
-
-    // Scenario weight still applies, but only against neighbors in the same lane
-    const pool = [];
-    buckets[chosen].forEach(s => {
-        const w = s.weight || 1;
-        for (let i = 0; i < w; i++) pool.push(s);
-    });
-    return pool[Math.floor(Math.random() * pool.length)];
+    return null;
 }
 
 function loadScenario(id) {
@@ -3278,6 +3330,25 @@ function loadScenario(id) {
     
     if (!scenario) {
         scenario = scenarios.find(s => s.id === 'find_meal'); // fallback
+    }
+
+    // dev only — logs what the picker actually had to choose from
+    if (location.hash === '#debug') {
+        const b = {};
+        scenarios.forEach(s => {
+            if (s.notRandom || (s.condition && !s.condition())) return;
+            b[s.category || 'encounter'] = (b[s.category || 'encounter'] || 0) + 1;
+        });
+        console.log(`d${state.day} ${formatClock(state.timeHour)}`, b, '→', scenario.id);
+    }
+
+    // Suppression bookkeeping. notRandom scenarios are forced or linked, never
+    // drawn, so they don't participate — recording them would poison the buffer.
+    if (!scenario.notRandom) {
+        if (!state.seenToday.includes(scenario.id)) state.seenToday.push(scenario.id);
+        state.recentSeen.unshift(scenario.id);
+        if (state.recentSeen.length > 20) state.recentSeen.pop();
+        state.lastSeenDay[scenario.id] = state.day;
     }
 
     if (scenario.onLoad) scenario.onLoad();
