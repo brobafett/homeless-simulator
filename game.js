@@ -1,6 +1,6 @@
 // Build version, shown on the title screen (initTitleScreen). Scheme 1.0.x.y:
 // bump x for a gameplay/content feature, y for a fix or tuning pass.
-const GAME_VERSION = '1.0.22.0';
+const GAME_VERSION = '1.0.23.0';
 
 // Winning means signing a lease: first month, deposit, and the application
 // fees nobody warns you about. Referenced by checkGameStatus and the sidebar
@@ -688,6 +688,9 @@ const scenarios = [
                 text: () => state.flags.shelterTipDay === state.day
                     ? "Try the downtown shelter anyway — Ray says they're full by six."
                     : "Try to get a bed at the downtown shelter.",
+                // Intake closes at 9 PM: night work costs your bed. Independent of
+                // the Ray/shelterFullDay logic — that's the other way this door dies.
+                requires: { check: () => state.timeHour >= 17 && state.timeHour < 21, checkLabel: '(Intake closed at 9 PM)' },
                 customAction: () => {
                     // On nights Ray called full, the walk over ends at a closed door
                     if (state.flags.shelterFullDay === state.day) {
@@ -759,7 +762,9 @@ const scenarios = [
                 // Deliberate travel: the paperwork corner is a known place, not a
                 // lottery ticket — the walk is always on offer while the library's open
                 text: "Walk to the branch library on Sycamore — the Hopewell Day Center is right across the street (30 min).",
-                hidden: () => state.timeHour < 7.5 || state.timeHour >= 19,
+                // A known place doesn't vanish after hours — the door is visible
+                // and closed. Offices closing at five is a beat, not a hole.
+                requires: { check: () => state.timeHour >= 7.5 && state.timeHour < 19, checkLabel: '(Closed until 8 AM)' },
                 effects: { timePassed: 0.5 },
                 nextScenario: 'hopewell_block'
             },
@@ -1107,8 +1112,9 @@ const scenarios = [
         notRandom: false,
         category: 'work',
         // The payout depends on hauling the bag to the recycling center, which keeps
-        // day hours — also stops this scene from owning the whole work lane at night
-        condition: () => state.timeHour >= 7 && state.timeHour <= 19,
+        // day hours — the window ends mid-afternoon so the evening work lane
+        // belongs to the evening scenes, not this one
+        condition: () => state.timeHour >= 7 && state.timeHour <= 15,
         text: "You spot a garbage bag full of crushed aluminum cans sitting near an alley entrance. It's easily worth $10 at the recycling center. But there's a shopping cart parked nearby—someone might have staged it there.",
         effects: { timePassed: 0.1 },
         choices: [
@@ -1363,6 +1369,78 @@ const scenarios = [
         notRandom: true,
         text: "You spend 4 grueling hours carrying heavy sheets of drywall up three flights of stairs. You are exhausted and starving, but you have 40 dollars in your pocket.",
         choices: [ { text: "Rest your aching muscles.", nextScenario: null } ]
+    },
+    // Evening work: daytime work costs hours; night work costs your bed. A late
+    // finish means shelter intake is closed — pay for a room or sleep rough at
+    // the worse tiers. That's the whole trade; no extra punishment stacked on.
+    {
+        // The always-available floor of the evening lane: no gate, real
+        // physical cost, done by ten.
+        id: 'event_teardown',
+        notRandom: false,
+        category: 'work',
+        condition: () => state.timeHour >= 16 && state.timeHour <= 20,
+        text: "A crew is breaking down staging and folding chairs behind the convention hall, and the foreman is short a pair of hands.", // TODO: copy
+        effects: { timePassed: 0.1 },
+        choices: [
+            { text: "Grab a load and fall in (2.5 hrs, $28.00).", requires: { health: 30 }, effects: { cash: 28.00, health: -10, warmth: -10, hunger: -15, timePassed: 2.5 }, nextScenario: 'teardown_done' },
+            { text: "Keep walking — your back knows better.", nextScenario: null }
+        ]
+    },
+    {
+        id: 'teardown_done',
+        notRandom: true,
+        text: "The truck doors slam and the foreman counts bills into your palm without ceremony. The street is dark and your shoulders are done.", // TODO: copy
+        effects: { mentalFortitude: 5 },
+        choices: [ { text: "Pocket the cash and step out into the night.", nextScenario: null } ]
+    },
+    {
+        // The prize of the evening lane, and what makes the shower systems
+        // load-bearing: the manager looks you over before letting you near
+        // the dish pit.
+        id: 'dishpit_closing',
+        notRandom: false,
+        category: 'work',
+        condition: () => state.timeHour >= 16.5 && state.timeHour <= 19,
+        text: "A bistro's kitchen door is propped open and the manager is scraping plates himself. 'Dish guy quit at four. Close with us and I pay cash.'", // TODO: copy
+        effects: { timePassed: 0.1 },
+        choices: [
+            { text: "Take the sink through close (4 hrs, $45.00 and a staff meal).",
+              requires: { hygiene: 45, hygieneLabel: '(He looks you over — not tonight)' },
+              effects: { cash: 45.00, health: -6, hunger: -10, timePassed: 4 }, nextScenario: 'dishpit_done' },
+            { text: "Not tonight.", nextScenario: null }
+        ]
+    },
+    {
+        id: 'dishpit_done',
+        notRandom: true,
+        text: "Last rack through the machine, and the cook slides you a plate of whatever the night didn't sell. You eat standing up while the manager counts out your pay.", // TODO: copy
+        effects: { hunger: 40, mentalFortitude: 8 },
+        choices: [ { text: "Head out the kitchen door into the dark.", nextScenario: null } ]
+    },
+    {
+        // The grapevine variant: same kitchen, better terms, no once-over —
+        // the manager takes you because Ray vouched. Scenario-level condition
+        // is the "hidden" convention: you can't see a disabled button for a
+        // job you never heard of.
+        id: 'ray_dishpit_line',
+        notRandom: false,
+        category: 'work',
+        condition: () => state.flags.metRay && (state.flags.streetRep || 0) >= 1 && state.timeHour >= 16.5 && state.timeHour <= 19,
+        text: "Ray flags you down: the bistro on Delancey lost its dish guy, and Ray already told the manager you're good for it. 'Walk in and say my name.'", // TODO: copy
+        effects: { timePassed: 0.1 },
+        choices: [
+            { text: "Walk in and say Ray's name (4 hrs, $55.00 and a staff meal).",
+              effects: { cash: 55.00, health: -6, hunger: -10, timePassed: 4 }, nextScenario: 'ray_dishpit_done' },
+            { text: "Not tonight — tell Ray thanks anyway.", nextScenario: null }
+        ]
+    },
+    {
+        id: 'ray_dishpit_done',
+        notRandom: true,
+        text: "The manager pays over the going rate without being asked — Ray's name is worth something in this kitchen. There's a plate for you before you go.", // TODO: copy
+        effects: { hunger: 40, mentalFortitude: 10 },
+        choices: [ { text: "Head out the kitchen door into the dark.", nextScenario: null } ]
     },
     {
         id: 'rainstorm_sudden',
@@ -2034,13 +2112,43 @@ const scenarios = [
         id: 'shoes_bought',
         notRandom: true,
         text: "You lace up the sneakers and leave your old wrecked pair in the store's trash can. Walking doesn't hurt anymore. It's amazing how much of survival comes down to your feet.",
-        choices: [ { text: "Walk on, faster than before.", nextScenario: null } ]
+        choices: [
+            {
+                // The outlet walk from the office already spent today's lastLaborDay
+                // stamp — without this the morning's work is silently forfeit
+                text: "Walk back to the labor office before the board empties (20 min).",
+                hidden: () => state.flags.hasJob,
+                requires: { check: () => state.timeHour >= 6 && state.timeHour + 0.3 <= 10, checkLabel: '(The tickets are gone by 10 AM)' },
+                effects: { timePassed: 0.3 },
+                nextScenario: 'labor_return'
+            },
+            { text: "Walk on, faster than before.", nextScenario: null }
+        ]
     },
     {
         id: 'boots_bought',
         notRandom: true,
         text: "The boots are heavy, warm, and tough as nails. With these, the dispatcher at the day labor office will let you take the construction tickets — the ones that actually pay.",
-        choices: [ { text: "Break them in.", nextScenario: null } ]
+        choices: [
+            {
+                text: "Walk straight back to the labor office and put them to work (20 min).",
+                hidden: () => state.flags.hasJob,
+                requires: { check: () => state.timeHour >= 6 && state.timeHour + 0.3 <= 10, checkLabel: '(The tickets are gone by 10 AM)' },
+                effects: { timePassed: 0.3 },
+                nextScenario: 'labor_return'
+            },
+            { text: "Break them in.", nextScenario: null }
+        ]
+    },
+    {
+        // Back at the board after the shoe run — the day's stamp is already
+        // spent, so this is the only road back to the tickets before ten
+        id: 'labor_return',
+        notRandom: true,
+        text: () => (state.flags.hasWorkBoots
+            ? "The dispatcher looks up as you walk back in, then down at your feet. 'Boots. Good.' The plastic chairs have thinned out, but the construction tickets are still on the board — the ones that actually pay."
+            : "The dispatcher looks up as you walk back in. The plastic chairs have thinned out since dawn, but there are still tickets on the board."),
+        choices: LABOR_TICKETS
     },
     {
         id: 'dumpster_backpack',
@@ -3264,7 +3372,12 @@ const SCENARIO_COOLDOWN = {
     stray_dog: 3,
     medical_clinic: 3,
     gym_trial: 3,
-    lost_wallet: 6
+    lost_wallet: 6,
+    // Evening work lane: an empty night is a true thing about the world —
+    // the weights renormalize when nothing's on
+    event_teardown: 1,
+    dishpit_closing: 2,
+    ray_dishpit_line: 2
 };
 
 // Scenarios that may legitimately fire more than once in a day. Everything else
@@ -3454,6 +3567,13 @@ function loadScenario(id) {
                 if (choice.requires.notFlag !== undefined && state.flags[choice.requires.notFlag]) { reqMet = false; reqMsg = choice.requires.notFlagLabel || '(Unavailable)'; }
                 if (choice.requires.stash !== undefined && state.foodStash < choice.requires.stash) { reqMet = false; reqMsg = '(Nothing packed to eat)'; }
                 if (choice.requires.stashSpace && state.foodStash >= carryCapacity()) { reqMet = false; reqMsg = '(No room in your bag)'; }
+                // hygiene mirrors the health gate, but the generic % message reads
+                // wrong for a once-over at a kitchen door — allow a custom label
+                if (choice.requires.hygiene !== undefined && state.hygiene < choice.requires.hygiene) { reqMet = false; reqMsg = choice.requires.hygieneLabel || `(Requires ${choice.requires.hygiene}% Hygiene)`; }
+                // check: generic gate for what the other keys can't express (a
+                // closed intake window). hidden = knowledge you don't have;
+                // a disabled check = a door you can see but can't open.
+                if (choice.requires.check !== undefined && !choice.requires.check()) { reqMet = false; reqMsg = choice.requires.checkLabel || '(Unavailable)'; }
             }
 
             if (reqMet) {
