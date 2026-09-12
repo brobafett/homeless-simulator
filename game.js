@@ -1,6 +1,6 @@
 // Build version, shown on the title screen (initTitleScreen). Scheme 1.0.x.y:
 // bump x for a gameplay/content feature, y for a fix or tuning pass.
-const GAME_VERSION = '1.0.23.1';
+const GAME_VERSION = '1.0.23.2';
 
 // Winning means signing a lease: first month, deposit, and the application
 // fees nobody warns you about. Referenced by checkGameStatus and the sidebar
@@ -37,8 +37,9 @@ let state = {
         idOrdered: false,
         idArrivesDay: 0,
         returned_wallet: false,
-        // Gear staging: the sleeping bag was always implicitly there — now it's a thing you can lose
-        hasSleepingBag: true,
+        // Gear staging. Footwear, pack, and the sleeping bag are not listed here on
+        // purpose: missing means the default (worn shoes, worn pack, bag owned) —
+        // see footwear() / packState() / ownsSleepingBag() and flags.lostSleepingBag
         gearStashed: false,
         stashSpotQuality: 1, // 1 = a spot anyone would check; 2 = one somebody showed you
         stashDay: 0,
@@ -93,11 +94,31 @@ function deleteSave() {
     document.getElementById('continue-area').style.display = 'none';
 }
 
+// Saves from before v1.0.23.2 tracked gear as overlapping booleans. Fold them
+// into the single-valued flags once, then drop the old keys so nothing can
+// read them by accident.
+function migrateLegacyFlags(flags) {
+    if (flags.footwear === undefined) {
+        if (flags.hasWorkBoots) flags.footwear = 'boots';
+        else if (flags.hasNewShoes) flags.footwear = 'sneakers';
+        else if (flags.shoeBroken) flags.footwear = 'broken';
+    }
+    if (flags.pack === undefined) {
+        if (flags.hasSturdyBackpack) flags.pack = 'sturdy';
+        else if (flags.backpackBroken) flags.pack = flags.luggingPlasticBag ? 'plastic' : 'broken';
+    }
+    if (flags.hasSleepingBag === false) flags.lostSleepingBag = true;
+    for (const k of ['hasWorkBoots', 'hasNewShoes', 'shoeBroken', 'hasSturdyBackpack', 'backpackBroken', 'luggingPlasticBag', 'hasSleepingBag']) {
+        delete flags[k];
+    }
+}
+
 function continueGame() {
     const saved = loadSave();
     if (!saved || !saved.mode) return;
 
     Object.assign(state, saved); // merge over defaults so old saves survive new fields
+    migrateLegacyFlags(state.flags);
 
     // Old saves predate repeat suppression — normalize rather than trust the save
     if (!Array.isArray(state.seenToday)) state.seenToday = [];
@@ -141,9 +162,18 @@ function walkHomeStoreLine() {
 }
 
 // How many packed meals your current bag can hold
+// Gear that has more than two states is one flag holding a string, not a
+// pile of overlapping booleans — so "boots with a torn sole" can't exist.
+// Missing = the default you start the game with.
+function footwear() { return state.flags.footwear || 'worn'; }   // 'broken' | 'worn' | 'sneakers' | 'boots'
+function hasWorkBoots() { return footwear() === 'boots'; }
+function hasDecentShoes() { return footwear() === 'sneakers' || footwear() === 'boots'; }
+function packState() { return state.flags.pack || 'worn'; }      // 'broken' | 'plastic' | 'worn' | 'sturdy'
+function packBroken() { return packState() === 'broken' || packState() === 'plastic'; }
+
 function carryCapacity() {
-    if (state.flags.hasSturdyBackpack) return 4;
-    if (state.flags.backpackBroken) return 1; // plastic grocery bag
+    if (packState() === 'sturdy') return 4;
+    if (packBroken()) return 1; // loose bundle or plastic grocery bag
     return 2; // worn or scavenged backpack
 }
 
@@ -153,15 +183,17 @@ function carryCapacity() {
 // other — applyEffects recomputes this after every flag change.
 function recomputeTimeModifier() {
     let m = 1.0;
-    if (state.flags.shoeBroken) m *= 1.3;        // limping on a torn sole
-    if (state.flags.luggingPlasticBag) m *= 1.5; // everything you own in one hand
+    if (footwear() === 'broken') m *= 1.3;       // limping on a torn sole
+    if (packState() === 'plastic') m *= 1.5;     // everything you own in one hand
     if (state.flags.gearStashed) m *= 0.85;      // traveling light, for once
     state.timeModifier = m;
 }
 
 // Old saves predate the flag, so "undefined" means the bag you always had
+// You start with a sleeping bag, so the flag records the exception (losing it)
+// rather than the default — no inverted "missing means owned" boolean.
 function ownsSleepingBag() {
-    return state.flags.hasSleepingBag !== false;
+    return !state.flags.lostSleepingBag;
 }
 
 // Owning a sleeping bag doesn't help if it's under a bush across town
@@ -919,9 +951,12 @@ function renderGear() {
     if (!list) return;
 
     const items = [];
-    let pack = 'Worn backpack';
-    if (state.flags.hasSturdyBackpack) pack = 'Heavy-duty pack';
-    else if (state.flags.backpackBroken) pack = 'Plastic grocery bag';
+    const pack = {
+        sturdy: 'Heavy-duty pack',
+        plastic: 'Plastic grocery bag',
+        broken: 'Broken backpack (one strap)',
+        worn: 'Worn backpack'
+    }[packState()];
     items.push(`${pack} — meals: ${state.foodStash}/${carryCapacity()}`);
 
     // The sleeping bag's states: on your back, behind a motel door, behind the
@@ -957,8 +992,8 @@ function renderGear() {
     const passes = state.flags.transitPasses || 0;
     if (passes > 0) items.push(`Bus day pass${passes === 1 ? '' : `es (×${passes})`}`);
 
-    if (state.flags.hasWorkBoots) items.push('Steel-toe work boots');
-    else if (state.flags.hasNewShoes) items.push('Decent sneakers');
+    const shoes = { boots: 'Steel-toe work boots', sneakers: 'Decent sneakers', broken: 'Torn shoe (limping)' }[footwear()];
+    if (shoes) items.push(shoes);
     if (state.flags.hasWinterCoat) items.push('Winter coat');
     if (state.hasCleanClothes) items.push('Clean clothes');
     if (state.flags.hasShelterReferral) items.push('Clinic referral slip');

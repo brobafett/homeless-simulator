@@ -1,10 +1,26 @@
+// scenarios.js — all narrative content for "The Streets".
+//
+// This file is content only: the scenario objects, plus the two shared choice
+// tables they reference (the labor dispatcher's tickets and the corner-store
+// shelf). It holds no engine logic. It must load AFTER game.js (see index.html):
+// everything here is declarative or lazily evaluated (arrow functions), and the
+// engine helpers it calls — loadScenario, applyEffects, resolveRoom, roomCost,
+// phoneActive, currentSeason, and so on — are only invoked at play time, once
+// both files have been evaluated.
+//
+// Why not JSON: scenarios carry functions (conditions, state-dependent text and
+// prices, customActions, onLoad hooks), and the game runs from file:// with no
+// build step, where fetch() of a sidecar JSON file is blocked anyway.
+//
+// Schema reference and authoring rules live in CLAUDE.md ("Scenario schema").
+
 // The dispatcher's ticket list — shared between labor_office and labor_board so
 // stashing your gear first doesn't cost you the morning's options
 const LABOR_TICKETS = [
     { text: "Take a general labor ticket — moving furniture (4 hrs, $40.00).", requires: { health: 40, hunger: 30 }, effects: { cash: 40.00, health: -10, hunger: -25, mentalFortitude: 5, timePassed: 4 }, nextScenario: 'labor_done_general' },
     {
         text: "Take a construction site ticket (6 hrs, $90.00).",
-        requires: { flag: 'hasWorkBoots', flagLabel: '(Requires work boots)', health: 50, hunger: 40 },
+        requires: { check: hasWorkBoots, checkLabel: '(Requires work boots)', health: 50, hunger: 40 },
         // You can't haul your bed to a jobsite and still lift block for six
         // hours — stashed gear halves what the shift takes out of you
         customAction: () => {
@@ -16,7 +32,7 @@ const LABOR_TICKETS = [
         // Boots shouldn't be a lottery ticket: the office is a guaranteed daily
         // stop, so it always offers the walk to the store that sells them
         text: "Walk two blocks to the discount shoe outlet the dispatcher mentioned (20 min).",
-        hidden: () => state.flags.hasWorkBoots,
+        hidden: hasWorkBoots,
         effects: { timePassed: 0.3 },
         nextScenario: 'shoe_store'
     },
@@ -106,7 +122,7 @@ const scenarios = [
             { text: "Beg outside the local bakery.", effects: { health: -2, mentalFortitude: -2, warmth: -5, hunger: 10, cash: 2.50 } },
             { text: "Search the dumpster behind the grocery store.", customAction: () => {
                 applyEffects({ health: -5, mentalFortitude: -5, warmth: -10, hunger: 30 });
-                if (state.flags.backpackBroken && Math.random() < 0.35) {
+                if (packBroken() && Math.random() < 0.35) {
                     loadScenario('dumpster_backpack');
                 } else {
                     loadScenario();
@@ -193,7 +209,7 @@ const scenarios = [
             { text: "Rest on a park bench.", effects: { health: 5, mentalFortitude: 15, warmth: -8, hunger: -5 } },
             { text: "Wander and collect cans for recycling.", customAction: () => {
                 applyEffects({ health: -5, mentalFortitude: 5, warmth: -10, hunger: -8, cash: 3.50 });
-                if (state.flags.backpackBroken && Math.random() < 0.35) {
+                if (packBroken() && Math.random() < 0.35) {
                     loadScenario('dumpster_backpack');
                 } else {
                     loadScenario();
@@ -333,12 +349,12 @@ const scenarios = [
         notRandom: false,
         category: 'hazard',
         // The scene narrates the sleeping bag spilling out, so it needs the bag on your back
-        condition: () => !state.flags.backpackBroken && !state.flags.hasSturdyBackpack && ownsSleepingBag() && !state.flags.gearStashed,
+        condition: () => packState() === 'worn' && ownsSleepingBag() && !state.flags.gearStashed,
         text: "As you hurry across the intersection, the left strap of your overstuffed backpack snaps. Your sleeping bag, a change of clothes, and your plastic folder of vital documents spill onto the wet pavement. You can't carry it all loose.",
-        effects: { mentalFortitude: -15, timePassed: 0.5, flags: { backpackBroken: true } },
+        effects: { mentalFortitude: -15, timePassed: 0.5, flags: { pack: 'broken' } },
         choices: [
-            { text: "Abandon the heavy sleeping bag. Keep the documents and extra clothes.", nextScenario: "street_lightweight", effects: { maxWarmthCapacity: -20, flags: { hasSleepingBag: false } } },
-            { text: "Use a discarded plastic grocery bag to bundle the loose items. It will drastically slow your walking speed.", nextScenario: "street_with_plastic_bag", effects: { flags: { luggingPlasticBag: true } } }
+            { text: "Abandon the heavy sleeping bag. Keep the documents and extra clothes.", nextScenario: "street_lightweight", effects: { maxWarmthCapacity: -20, flags: { lostSleepingBag: true } } },
+            { text: "Use a discarded plastic grocery bag to bundle the loose items. It will drastically slow your walking speed.", nextScenario: "street_with_plastic_bag", effects: { flags: { pack: 'plastic' } } }
         ]
     },
     {
@@ -402,13 +418,13 @@ const scenarios = [
         id: 'shoe_blowout',
         notRandom: false,
         category: 'hazard',
-        condition: () => !state.flags.hasNewShoes,
+        condition: () => !hasDecentShoes(),
         text: "Disaster. The worn-out sole of your right shoe finally tears completely off. Walking on the exposed pavement is agonizing.",
         effects: { mentalFortitude: -20, timePassed: 0 },
         choices: [
             { text: "Buy some duct tape at a convenience store to patch it.", requires: { cash: 2.00 }, effects: { cash: -2.00, timePassed: 0.5 }, nextScenario: 'shoe_patched' },
             { text: "Tear a piece of your shirt to tie it together.", nextScenario: 'shoe_shirt', effects: { maxWarmthCapacity: -10, timePassed: 0.5 } },
-            { text: "Limp along with the broken shoe.", nextScenario: 'shoe_broken_limp', effects: { flags: { shoeBroken: true } } }
+            { text: "Limp along with the broken shoe.", nextScenario: 'shoe_broken_limp', effects: { flags: { footwear: 'broken' } } }
         ]
     },
     {
@@ -1525,8 +1541,8 @@ const scenarios = [
         notRandom: false,
         category: 'quest',
         weight: 2,
-        condition: () => !state.flags.hasWorkBoots && state.timeHour >= 9 && state.timeHour <= 18,
-        text: () => state.flags.hasNewShoes ?
+        condition: () => !hasWorkBoots() && state.timeHour >= 9 && state.timeHour <= 18,
+        text: () => hasDecentShoes() ?
             "You pass the discount shoe outlet again. Your sneakers are holding up, but the steel-toe work boots in the window would open up construction work at the labor office." :
             "A discount shoe outlet has a clearance rack out front. Your own footwear is one bad step from falling apart. Decent shoes would change your days; the steel-toe work boots in the window would open up construction work.",
         effects: { timePassed: 0.1 },
@@ -1535,8 +1551,7 @@ const scenarios = [
                 text: "Buy a solid pair of used sneakers ($12.00).",
                 requires: { cash: 12.00 },
                 customAction: () => {
-                    state.flags.hasNewShoes = true;
-                    state.flags.shoeBroken = false;
+                    state.flags.footwear = 'sneakers';
                     applyEffects({ cash: -12.00, mentalFortitude: 10, timePassed: 0.5 });
                     loadScenario('shoes_bought');
                 }
@@ -1545,9 +1560,7 @@ const scenarios = [
                 text: "Invest in steel-toe work boots ($35.00).",
                 requires: { cash: 35.00 },
                 customAction: () => {
-                    state.flags.hasNewShoes = true;
-                    state.flags.hasWorkBoots = true;
-                    state.flags.shoeBroken = false;
+                    state.flags.footwear = 'boots';
                     applyEffects({ cash: -35.00, mentalFortitude: 15, timePassed: 0.5 });
                     loadScenario('boots_bought');
                 }
@@ -1592,7 +1605,7 @@ const scenarios = [
         // spent, so this is the only road back to the tickets before ten
         id: 'labor_return',
         notRandom: true,
-        text: () => (state.flags.hasWorkBoots
+        text: () => (hasWorkBoots()
             ? "The dispatcher looks up as you walk back in, then down at your feet. 'Boots. Good.' The plastic chairs have thinned out, but the construction tickets are still on the board — the ones that actually pay."
             : "The dispatcher looks up as you walk back in. The plastic chairs have thinned out since dawn, but there are still tickets on the board."),
         choices: LABOR_TICKETS
@@ -1605,8 +1618,7 @@ const scenarios = [
             {
                 text: "Take it and transfer your things.",
                 customAction: () => {
-                    state.flags.backpackBroken = false;
-                    state.flags.luggingPlasticBag = false;
+                    state.flags.pack = 'worn';
                     applyEffects({ mentalFortitude: 10, timePassed: 0.3 });
                     loadScenario();
                 }
@@ -1618,16 +1630,15 @@ const scenarios = [
         notRandom: false,
         category: 'quest',
         weight: 2,
-        condition: () => !state.flags.hasSturdyBackpack && state.timeHour >= 9 && state.timeHour <= 18,
+        condition: () => packState() !== 'sturdy' && state.timeHour >= 9 && state.timeHour <= 18,
         text: "An army surplus store has bins of used gear on the sidewalk — faded rucksacks, canteens, wool socks. Behind the counter hang the new heavy-duty packs: double-stitched straps, the kind that never let go.",
         effects: { timePassed: 0.1 },
         choices: [
             {
                 text: "Buy a used backpack from the bin ($8.00).",
-                requires: { cash: 8.00, flag: 'backpackBroken', flagLabel: "(Your current pack is holding together)" },
+                requires: { cash: 8.00, check: packBroken, checkLabel: "(Your current pack is holding together)" },
                 customAction: () => {
-                    state.flags.backpackBroken = false;
-                    state.flags.luggingPlasticBag = false;
+                    state.flags.pack = 'worn';
                     applyEffects({ cash: -8.00, mentalFortitude: 10, timePassed: 0.5 });
                     loadScenario('backpack_used_bought');
                 }
@@ -1636,9 +1647,7 @@ const scenarios = [
                 text: "Buy a new heavy-duty backpack ($30.00).",
                 requires: { cash: 30.00 },
                 customAction: () => {
-                    state.flags.backpackBroken = false;
-                    state.flags.hasSturdyBackpack = true;
-                    state.flags.luggingPlasticBag = false;
+                    state.flags.pack = 'sturdy';
                     applyEffects({ cash: -30.00, mentalFortitude: 15, timePassed: 0.5 });
                     loadScenario('backpack_new_bought');
                 }
@@ -1750,7 +1759,7 @@ const scenarios = [
                     const sweepChance = Math.min(0.55, base + 0.08 * daysOut);
                     state.flags.gearStashed = false;
                     if (Math.random() < sweepChance) {
-                        state.flags.hasSleepingBag = false;
+                        state.flags.lostSleepingBag = true;
                         applyEffects({ maxWarmthCapacity: -20, mentalFortitude: -20, timePassed: 0.5 });
                         loadScenario('stash_swept');
                     } else {
@@ -1826,7 +1835,7 @@ const scenarios = [
         text: "A church van idles at the corner with its rear doors open: a folding table, a coffee urn, and a wall of donated blankets and surplus sleeping bags. A volunteer works down the line — no clipboard, no questions, one bag per person. The line is long. It moves anyway.",
         effects: { timePassed: 0.1 },
         choices: [
-            { text: "Get in line and wait your turn.", effects: { warmth: 10, mentalFortitude: 10, maxWarmthCapacity: 20, timePassed: 2, flags: { hasSleepingBag: true } }, nextScenario: 'bedroll_received' },
+            { text: "Get in line and wait your turn.", effects: { warmth: 10, mentalFortitude: 10, maxWarmthCapacity: 20, timePassed: 2, flags: { lostSleepingBag: false } }, nextScenario: 'bedroll_received' },
             { text: "Two hours is more than you have today. Keep moving.", nextScenario: null }
         ]
     },
