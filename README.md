@@ -28,7 +28,7 @@ Some things that help:
 
 ## Development
 
-The entire game lives in three files: `index.html` (UI shell), `style.css`, and `game.js` (engine + all scenario content). Scenarios are declarative objects in the `scenarios` array — adding content usually means adding an entry there.
+The entire game lives in four files: `index.html` (UI shell), `style.css`, `game.js` (the engine), and `scenarios.js` (all scenario content). Scenarios are declarative objects in the `scenarios` array in `scenarios.js` — adding content usually means adding an entry there, without touching the engine.
 
 Run the test suite (Node, no dependencies):
 
