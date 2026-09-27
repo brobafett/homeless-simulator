@@ -1,6 +1,6 @@
 // Build version, shown on the title screen (initTitleScreen). Scheme 1.0.x.y:
 // bump x for a gameplay/content feature, y for a fix or tuning pass.
-const GAME_VERSION = '1.0.23.2';
+const GAME_VERSION = '1.0.24.0';
 
 // Winning means signing a lease: first month, deposit, and the application
 // fees nobody warns you about. Referenced by checkGameStatus and the sidebar
@@ -466,6 +466,42 @@ function payWithFunds(amount) {
     const fromCard = Math.round((amount - fromCash) * 100) / 100;
     if (fromCard > 0) state.flags.bankBalance = Math.max(0, Math.round(((state.flags.bankBalance || 0) - fromCard) * 100) / 100);
     return fromCard;
+}
+
+// W-2 pay is weekly, not per-shift: a shift's gross accrues to pendingWages, and
+// only a payday actually moves money. On payday, everything accrued BEFORE
+// today's shift pays out first (pay runs a period in arrears), then today's
+// shift starts the next period. All warehouse pay must route through here —
+// wage garnishment (later feature) hooks in at the payout step below.
+const PAY_PERIOD_DAYS = 7;
+const CHECK_CASHING_FEE_RATE = 0.03;
+
+function workShift(gross) {
+    state.flags.pendingWages = state.flags.pendingWages || 0;
+    // Legacy save: employed with no payday on the books yet — start a fresh period from today
+    if (state.flags.nextPayday === undefined) state.flags.nextPayday = state.day + PAY_PERIOD_DAYS;
+
+    state.flags._paycheck = null;
+
+    if (state.day >= state.flags.nextPayday) {
+        const amount = Math.round(state.flags.pendingWages * 100) / 100;
+        if (amount > 0) {
+            let fee = 0;
+            const banked = !!state.flags.hasBankAccount;
+            if (banked) {
+                state.flags.bankBalance = Math.round(((state.flags.bankBalance || 0) + amount) * 100) / 100;
+            } else {
+                fee = Math.round(amount * CHECK_CASHING_FEE_RATE * 100) / 100;
+                state.cash = Math.round((state.cash + (amount - fee)) * 100) / 100;
+            }
+            state.flags._paycheck = { amount, fee, banked };
+        }
+        state.flags.pendingWages = 0;
+        // A long gap between shifts can't leave payday stuck in the past
+        while (state.flags.nextPayday <= state.day) state.flags.nextPayday += PAY_PERIOD_DAYS;
+    }
+
+    state.flags.pendingWages = Math.round((state.flags.pendingWages + gross) * 100) / 100;
 }
 
 function resolveRoom(tier, prepaid) {
@@ -988,6 +1024,11 @@ function renderGear() {
     if (motelDays > 0) items.push(`Motel residency proof (${motelDays} day${motelDays === 1 ? '' : 's'} remaining)`);
 
     if (state.flags.hasBankAccount) items.push(`ATM card — checking $${(state.flags.bankBalance || 0).toFixed(2)}`);
+
+    if (state.flags.hasJob) {
+        const payday = state.flags.nextPayday !== undefined ? state.flags.nextPayday : state.day + PAY_PERIOD_DAYS;
+        items.push(`Paycheck: $${(state.flags.pendingWages || 0).toFixed(2)} accrued — payday day ${payday}`);
+    }
 
     const passes = state.flags.transitPasses || 0;
     if (passes > 0) items.push(`Bus day pass${passes === 1 ? '' : `es (×${passes})`}`);

@@ -1176,7 +1176,16 @@ const scenarios = [
         text: "The gate hut smells of diesel and burnt coffee. Duane turns out to be a broad, gray man with a clipboard and no interest in small talk. He looks at your ID, your clean shirt, the phone number you print on the line he points to. Four minutes, start to finish. 'Pamela says you're steady. That buys you the interview, not the job. Sixteen an hour, eight-hour shifts, gate at six sharp. Miss two shifts and don't come back — I owe her, I don't owe you.'",
         effects: { timePassed: 0.3 },
         choices: [
-            { text: "Take it. Six a.m.", effects: { mentalFortitude: 20, timePassed: 0.5, flags: { hasJob: true, missedShifts: 0 } }, nextScenario: 'warehouse_hired' },
+            {
+                text: "Take it. Six a.m.",
+                effects: { mentalFortitude: 20, timePassed: 0.5, flags: { hasJob: true, missedShifts: 0 } },
+                // nextPayday depends on state.day at hire time — can't sit in a static effects object
+                customAction: () => {
+                    state.flags.nextPayday = state.day + PAY_PERIOD_DAYS;
+                    state.flags.pendingWages = 0;
+                    loadScenario('warehouse_hired');
+                }
+            },
             { text: "Ask for a day to think it over.", nextScenario: null }
         ]
     },
@@ -1207,9 +1216,23 @@ const scenarios = [
             }
         },
         choices: [
-            { text: "Clock in — hot lunch from the roach coach at the gate ($7.00).", requires: { cash: 7.00 }, effects: { cash: 121.00, hunger: 15, health: -4, mentalFortitude: 6, warmth: 8, timePassed: 8.5 }, nextScenario: 'shift_done' },
-            { text: "Clock in — eat from your bag at the lunch whistle.", requires: { stash: 1 }, effects: { cash: 128.00, foodStash: -1, hunger: 25, health: -4, mentalFortitude: 5, warmth: 8, timePassed: 8.5 }, nextScenario: 'shift_done' },
-            { text: "Clock in — work through lunch.", effects: { cash: 128.00, hunger: -20, health: -8, mentalFortitude: 2, warmth: 8, timePassed: 8.5 }, nextScenario: 'shift_done' },
+            {
+                text: "Clock in — hot lunch from the roach coach at the gate ($7.00).",
+                requires: { cash: 7.00 },
+                effects: { cash: -7.00, hunger: 15, health: -4, mentalFortitude: 6, warmth: 8, timePassed: 8.5 },
+                customAction: () => { workShift(128.00); loadScenario('shift_done'); }
+            },
+            {
+                text: "Clock in — eat from your bag at the lunch whistle.",
+                requires: { stash: 1 },
+                effects: { foodStash: -1, hunger: 25, health: -4, mentalFortitude: 5, warmth: 8, timePassed: 8.5 },
+                customAction: () => { workShift(128.00); loadScenario('shift_done'); }
+            },
+            {
+                text: "Clock in — work through lunch.",
+                effects: { hunger: -20, health: -8, mentalFortitude: 2, warmth: 8, timePassed: 8.5 },
+                customAction: () => { workShift(128.00); loadScenario('shift_done'); }
+            },
             {
                 text: "Call out. You can't face the dock today.",
                 customAction: () => {
@@ -1230,11 +1253,21 @@ const scenarios = [
         notRandom: true,
         onLoad: () => { state.flags.shiftsWorked = (state.flags.shiftsWorked || 0) + 1; },
         text: () => {
+            let base;
             switch ((state.flags.shiftsWorked || 0) % 3) {
-                case 1: return "The whistle ends the shift and the dock exhales. Your hands ache in a way day labor never quite managed — steadier, more honest, the ache of the same work you'll do again tomorrow. A hundred twenty-eight dollars, and nobody made you wait in line at dawn to earn it.";
-                case 2: return "Teo clocks out beside you, still narrating: the truck count, the forklift's politics, what his wife's making tonight. 'See you at six, chief.' It lands strangely warm. People expecting you tomorrow is its own kind of shelter.";
-                default: return "Duane stops you at the gate with two fingers, checks something off the clipboard, and gives you a nod that costs him visible effort. From him, you gather, that's employee of the month. The evening opens up in front of you, and for once it starts with money in your pocket.";
+                // TODO: copy — plain replacement for the old flat "$128 in your pocket" clause, now that pay is periodic
+                case 1: base = "The whistle ends the shift and the dock exhales. Your hands ache in a way day labor never quite managed — steadier, more honest, the ache of the same work you'll do again tomorrow. Today's hours go on the books instead of into your pocket, and nobody made you wait in line at dawn to earn them."; break;
+                case 2: base = "Teo clocks out beside you, still narrating: the truck count, the forklift's politics, what his wife's making tonight. 'See you at six, chief.' It lands strangely warm. People expecting you tomorrow is its own kind of shelter."; break;
+                default: base = "Duane stops you at the gate with two fingers, checks something off the clipboard, and gives you a nod that costs him visible effort. From him, you gather, that's employee of the month. The evening opens up in front of you, and for once it starts with money in your pocket.";
             }
+            const p = state.flags._paycheck;
+            if (p) {
+                // TODO: copy — payday narration
+                base += p.banked
+                    ? ` Payday: direct deposit puts $${p.amount.toFixed(2)} in your checking account.`
+                    : ` Payday: you cash the check at the counter down the block — $${p.fee.toFixed(2)} held back, $${(p.amount - p.fee).toFixed(2)} in your pocket.`;
+            }
+            return base;
         },
         choices: [
             { text: "Split a pot of coffee with Teo at the diner counter ($3.00).", requires: { cash: 3.00 }, effects: { cash: -3.00, mentalFortitude: 10, warmth: 15, timePassed: 0.7 }, nextScenario: null },
@@ -1244,9 +1277,19 @@ const scenarios = [
                 // reach. No account yet? An early whistle is exactly the day to
                 // open one — the employed player never sees idle_time in banker's
                 // hours, so the offer has to live here
-                text: () => state.flags.hasBankAccount
-                    ? `Walk your pay to the bank before the teller window closes ($${state.cash.toFixed(2)} in your pocket).`
-                    : "Take your pay and your ID to Cornerstone Community Bank — the teller window's still open (20 min).",
+                text: () => {
+                    const paidToday = !!state.flags._paycheck;
+                    if (state.flags.hasBankAccount) {
+                        return paidToday
+                            ? `Walk your pay to the bank before the teller window closes ($${state.cash.toFixed(2)} in your pocket).`
+                            // TODO: copy
+                            : "Stop by the bank before the teller window closes.";
+                    }
+                    return paidToday
+                        ? "Take your pay and your ID to Cornerstone Community Bank — the teller window's still open (20 min)."
+                        // TODO: copy
+                        : "Take your ID to Cornerstone Community Bank — the teller window's still open (20 min).";
+                },
                 hidden: () => !(state.mode === 'goal' && state.hasID && state.timeHour >= 9 && state.timeHour <= 16.5),
                 effects: { timePassed: 0.35 },
                 nextScenario: 'bank_branch'
@@ -1264,8 +1307,17 @@ const scenarios = [
     {
         id: 'warehouse_fired',
         notRandom: true,
-        text: "Duane is waiting at the gate hut with an envelope — your last pay, counted out in cash. He doesn't raise his voice. 'Second one. I told you the math.' He looks past you at the dock, where the work is already moving on without you. 'Pamela vouched for you. Go square it with her, not me.' The roll-up door comes down like a sentence ending.",
-        effects: { cash: 64.00, mentalFortitude: -25, timePassed: 0.5, flags: { hasJob: false, jobSearchUnlocked: false, firedFromWarehouse: true } },
+        // Final pay is whatever's on the books, counted out in cash, no fee — the
+        // amount depends on runtime state, so it can't sit in a static effects object
+        onLoad: () => {
+            const amount = Math.round((state.flags.pendingWages || 0) * 100) / 100;
+            state.flags._finalPayout = amount;
+            state.cash = Math.round((state.cash + amount) * 100) / 100;
+            state.flags.pendingWages = 0;
+            delete state.flags.nextPayday;
+        },
+        text: () => `Duane is waiting at the gate hut with an envelope — your last pay, counted out in cash: $${(state.flags._finalPayout || 0).toFixed(2)}. He doesn't raise his voice. 'Second one. I told you the math.' He looks past you at the dock, where the work is already moving on without you. 'Pamela vouched for you. Go square it with her, not me.' The roll-up door comes down like a sentence ending.`,
+        effects: { mentalFortitude: -25, timePassed: 0.5, flags: { hasJob: false, jobSearchUnlocked: false, firedFromWarehouse: true } },
         choices: [ { text: "Walk. Anywhere.", nextScenario: null } ]
     },
     {
