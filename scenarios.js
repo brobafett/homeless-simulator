@@ -53,6 +53,18 @@ const LABOR_TICKETS = [
     { text: "Leave. You're in no shape to work today.", nextScenario: null }
 ];
 
+// Letter kinds for the mail queue (sendLetter / processMailDeadlines in game.js).
+// travelDays: days from send to the bin. respondDays: days after arrival to
+// answer (null = no deadline). onMissed runs once, the morning after the
+// deadline, whether or not the letter was ever read.
+const LETTER_KINDS = {
+    waitlist_confirm: {
+        travelDays: 6, respondDays: 3,
+        pickupScenario: 'letter_waitlist',
+        onMissed: () => { state.flags.waitlistDropped = true; }
+    }
+};
+
 // The corner-store shelf — shared between the walk-in scene and the browse loop
 // so buying one thing doesn't bounce you out the door mid-errand
 const STORE_PURCHASES = [
@@ -325,6 +337,8 @@ const scenarios = [
         weight: 2,
         condition: () => state.hasID && state.flags.intake_attempted && !state.flags.intake_completed && state.timeHour >= 9 && state.timeHour <= 16,
         text: "The housing office again — same three miles, same plastic chairs. But this time the shelter's front desk printed the verification form before you finished your coffee: thirty seconds of photocopying, now that there's a card to copy. The caseworker staples it all together and types for a long time. 'You're assessed. You're in the system.' She hesitates, the way people do before the second half of a sentence. 'The list for placement is running eighteen months to three years. Keep your address current with us.' A year and a half. But for the first time, a piece of paper in this building has your name spelled right on it.",
+        // The office mails a confirmation that has to be answered to stay on the list
+        onLoad: () => { sendLetter('waitlist_confirm'); },
         effects: { mentalFortitude: 10, timePassed: 2, flags: { intake_completed: true } },
         choices: [
             { text: "Take your copy and step back out. The list is long — your plans stay yours.", nextScenario: null }
@@ -986,19 +1000,34 @@ const scenarios = [
             },
             {
                 text: "Check Hopewell's mail bin for your name.",
-                // Standing errand until the ID is in hand: an empty bin that names
-                // your next step beats an option that only appears once the engine
-                // already knows something is waiting
-                hidden: () => !(state.mode === 'goal' && state.flags.hasMailingAddress && !state.hasID && state.timeHour >= 8 && state.timeHour <= 16),
+                // Standing errand for anyone with the address: an empty bin that
+                // names your next step beats an option that only appears once the
+                // engine already knows something is waiting. Stays up after the ID
+                // because queued letters (state.mailbox) land here too.
+                hidden: () => !(state.mode === 'goal' && state.flags.hasMailingAddress && state.timeHour >= 8 && state.timeHour <= 16),
                 customAction: () => {
                     if (state.flags.birthCertOrdered && !state.flags.hasBirthCert && state.day >= (state.flags.birthCertArrivesDay || 0)) {
                         loadScenario('mail_arrives');
                     } else if (state.flags.idOrdered && !state.flags.idViaMotel && !state.hasID && state.day >= (state.flags.idArrivesDay || 0)) {
                         loadScenario('id_arrives');
                     } else {
-                        loadScenario('hopewell_no_mail');
+                        const letter = arrivedUnreadAt('hopewell');
+                        if (letter) {
+                            letter.status = 'read';
+                            loadScenario(LETTER_KINDS[letter.kind].pickupScenario);
+                        } else {
+                            loadScenario('hopewell_no_mail');
+                        }
                     }
                 }
+            },
+            {
+                text: "Deal with the housing letter.", // TODO: copy
+                hidden: () => {
+                    const l = findLetter('waitlist_confirm');
+                    return !(l && l.status === 'read' && !l.missed);
+                },
+                nextScenario: 'letter_waitlist'
             },
             {
                 text: "Take a seat at a library computer.",
@@ -1054,6 +1083,10 @@ const scenarios = [
                 const wait = Math.max(1, (state.flags.idArrivesDay || 0) - state.day);
                 return "The volunteer checks the bin out of politeness, but you both know the answer: you had the DMV send the card to the motel's street address. 'That envelope was never coming here, hon. Watch your front desk — give it another " + (wait === 1 ? "day" : wait + " days") + ".'";
             }
+            if (state.hasID) {
+                // Never hint at a queued letter's arrival day — the bin is just empty
+                return "The volunteer flips through the bin. 'Nothing under your name today.'"; // TODO: copy
+            }
             if (state.flags.hasBirthCert) {
                 return "The volunteer doesn't even reach for the bin. 'Nothing's coming, hon — nothing's been filed. You've got the birth certificate in hand; the DMV is the next window. The state only writes back after you give it a reason to.'";
             }
@@ -1071,6 +1104,56 @@ const scenarios = [
             },
             { text: "Cross back to the library.", nextScenario: 'hopewell_block' },
             { text: "Head out.", nextScenario: null }
+        ]
+    },
+    {
+        // The housing office's confirmation letter (LETTER_KINDS.waitlist_confirm).
+        // Reached from the mail bin or the block's "housing letter" choice. If the
+        // deadline passed before you read it, the drop already happened.
+        id: 'letter_waitlist',
+        notRandom: true,
+        text: () => {
+            const l = findLetter('waitlist_confirm');
+            if (l && l.missed) {
+                return "A letter from the housing office: the response date printed on it has already passed, and you've been dropped from the waitlist."; // TODO: copy
+            }
+            return `A letter from the housing office: respond by day ${l ? l.deadlineDay : state.day} to stay on the waitlist.`; // TODO: copy
+        },
+        choices: [
+            {
+                text: "Call the number on the letter.",
+                hidden: () => { const l = findLetter('waitlist_confirm'); return !l || l.missed; },
+                requires: { check: phoneActive, checkLabel: '(No phone minutes)' },
+                customAction: () => {
+                    findLetter('waitlist_confirm').status = 'resolved';
+                    state.flags.onHousingList = true;
+                    applyEffects({ timePassed: 0.3 });
+                    loadScenario('hopewell_block');
+                }
+            },
+            {
+                // The intake office is the same three-mile walk as the assessment
+                text: "Walk to the housing office (2 hrs).",
+                hidden: () => { const l = findLetter('waitlist_confirm'); return !l || l.missed; },
+                requires: { check: () => state.timeHour >= 9 && state.timeHour <= 16, checkLabel: '(Housing office: 9 AM–4 PM)' },
+                customAction: () => {
+                    findLetter('waitlist_confirm').status = 'resolved';
+                    state.flags.onHousingList = true;
+                    applyEffects({ timePassed: 2 });
+                    loadScenario();
+                }
+            },
+            {
+                text: "Deal with it later.",
+                hidden: () => { const l = findLetter('waitlist_confirm'); return !l || l.missed; },
+                nextScenario: 'hopewell_block'
+            },
+            {
+                text: "Fold the letter away and move on.", // TODO: copy
+                hidden: () => { const l = findLetter('waitlist_confirm'); return !(l && l.missed); },
+                effects: { mentalFortitude: -10, timePassed: 0.1 },
+                nextScenario: 'hopewell_block'
+            }
         ]
     },
     {

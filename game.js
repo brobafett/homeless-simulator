@@ -1,6 +1,6 @@
 // Build version, shown on the title screen (initTitleScreen). Scheme 1.0.x.y:
 // bump x for a gameplay/content feature, y for a fix or tuning pass.
-const GAME_VERSION = '1.0.24.0';
+const GAME_VERSION = '1.0.25.0';
 
 // Winning means signing a lease: first month, deposit, and the application
 // fees nobody warns you about. Referenced by checkGameStatus and the sidebar
@@ -27,6 +27,9 @@ let state = {
     seenToday: [],        // scenario ids already served today
     recentSeen: [],       // scenario ids, most recent first, capped at 20
     lastSeenDay: {},      // scenario id -> day it last fired
+    // Letters addressed to the player, in send order. Plain data only — the
+    // behavior for each kind lives in LETTER_KINDS (scenarios.js). See sendLetter.
+    mailbox: [],
     hasID: false,
     hasCleanClothes: false,
     flags: {
@@ -124,6 +127,7 @@ function continueGame() {
     if (!Array.isArray(state.seenToday)) state.seenToday = [];
     if (!Array.isArray(state.recentSeen)) state.recentSeen = [];
     if (!state.lastSeenDay || typeof state.lastSeenDay !== 'object') state.lastSeenDay = {};
+    if (!Array.isArray(state.mailbox)) state.mailbox = []; // saves before 1.0.25.0 have no mail queue
 
     recomputeTimeModifier();     // timeModifier is derived from flags, never trusted from the save
 
@@ -241,9 +245,68 @@ function advanceDay() {
     state.day++;
     state.seenToday = []; // a new day re-opens everything the old one used up
     if ((state.flags.motelDaysRemaining || 0) > 0) state.flags.motelDaysRemaining--;
+    processMailDeadlines();
     if (state.mode === "endless") {
         state.difficultyMultiplier += 0.08; // Every day gets 8% harder
     }
+}
+
+// Mail: letters that land at the player's mailing address on a future day,
+// often with a response deadline. Items are plain data in state.mailbox:
+//   { id, kind, address, sentDay, arriveDay, deadlineDay, status, missed }
+// status is 'in_transit' | 'read' | 'resolved'; "arrived" is derived
+// (in_transit and state.day >= arriveDay). Per-kind behavior — travel time,
+// response window, pickup scene, what a missed deadline costs — lives in
+// LETTER_KINDS in scenarios.js. Deadlines run whether or not the letter has
+// been read: the system doesn't wait for you to check your mail.
+function sendLetter(kind) {
+    if (!Array.isArray(state.mailbox)) state.mailbox = [];
+    if (state.mailbox.some(l => l.kind === kind && l.status !== 'resolved')) return;
+    const def = LETTER_KINDS[kind];
+    const arriveDay = state.day + def.travelDays;
+    state.mailbox.push({
+        id: `${kind}_${state.day}`,
+        kind,
+        address: 'hopewell',
+        sentDay: state.day,
+        arriveDay,
+        deadlineDay: def.respondDays === null || def.respondDays === undefined ? null : arriveDay + def.respondDays,
+        status: 'in_transit',
+        missed: false
+    });
+}
+
+// Called from advanceDay(): a passed deadline fires its consequence exactly once
+function processMailDeadlines() {
+    if (!Array.isArray(state.mailbox)) return;
+    for (const letter of state.mailbox) {
+        if (letter.deadlineDay === null || letter.status === 'resolved' || letter.missed) continue;
+        if (state.day > letter.deadlineDay) {
+            letter.missed = true;
+            const def = LETTER_KINDS[letter.kind];
+            if (def && def.onMissed) def.onMissed();
+        }
+    }
+}
+
+// Oldest letter that has landed at this address and hasn't been picked up
+function arrivedUnreadAt(address) {
+    if (!Array.isArray(state.mailbox)) return null;
+    let oldest = null;
+    for (const l of state.mailbox) {
+        if (l.address !== address || l.status !== 'in_transit' || state.day < l.arriveDay) continue;
+        if (!oldest || l.arriveDay < oldest.arriveDay) oldest = l;
+    }
+    return oldest;
+}
+
+// Most recently sent letter of this kind, in any status
+function findLetter(kind) {
+    if (!Array.isArray(state.mailbox)) return null;
+    for (let i = state.mailbox.length - 1; i >= 0; i--) {
+        if (state.mailbox[i].kind === kind) return state.mailbox[i];
+    }
+    return null;
 }
 
 // Seasons: derived entirely from state.day — no new save fields, so old saves
@@ -1044,6 +1107,19 @@ function renderGear() {
         if (state.flags.hasMailingAddress) items.push('Mailing address (Hopewell)');
         if (state.flags.hasBirthCert) items.push('Birth certificate');
         if (state.flags.idOrdered) items.push(`State ID (in the mail — day ${state.flags.idArrivesDay})`);
+    }
+
+    // Mail shows only once it's been read — a letter in transit or sitting
+    // unread in the bin is something the player doesn't know about yet
+    const waitlistLetter = findLetter('waitlist_confirm');
+    if (waitlistLetter && waitlistLetter.status === 'read' && !waitlistLetter.missed) {
+        items.push(`Housing letter — respond by day ${waitlistLetter.deadlineDay}`);
+    }
+    if (state.flags.onHousingList) items.push('Housing waitlist (active)');
+    // The drop happens on the deadline, read or not — but it only shows once
+    // the player has opened the letter that tells them
+    if (state.flags.waitlistDropped && !(waitlistLetter && waitlistLetter.status === 'in_transit')) {
+        items.push('Housing waitlist (dropped)');
     }
 
     list.innerHTML = items.map(i => `<li>${i}</li>`).join('');

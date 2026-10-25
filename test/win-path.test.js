@@ -1039,5 +1039,115 @@ state.flags.bankBalance = 500; state.cash = 100;
 renderStats();
 assert(els['check-cash'].textContent.includes('$600'), 'goal checklist shows pocket and bank combined');
 
+// --- Mail queue: letters land on a future day, and deadlines run unread ---
+function mailSetup() {
+    state.mode = 'goal'; state.timeModifier = 1.0; state.day = 5; // autumn
+    state.flags = { hasMailingAddress: true, intake_attempted: true };
+    state.hasID = true; state.hasCleanClothes = false;
+    state.mailbox = [];
+    topUp(); state.cash = 0;
+}
+function choiceTexts() { return els['choices-list'].children.map(b => b.textContent); }
+
+mailSetup();
+loadScenario('intake_return');
+assert(state.mailbox.length === 1 && state.mailbox[0].kind === 'waitlist_confirm', 'intake_return mails the waitlist confirmation');
+const wl = state.mailbox[0];
+assert(wl.arriveDay === 11 && wl.deadlineDay === 14, 'sendLetter: arrives in 6 days, respond within 3 (arrive ' + wl.arriveDay + ', deadline ' + wl.deadlineDay + ')');
+assert(wl.id === 'waitlist_confirm_5' && wl.address === 'hopewell' && wl.status === 'in_transit' && wl.missed === false, 'sendLetter: id, address, status, missed set');
+sendLetter('waitlist_confirm');
+assert(state.mailbox.length === 1, 'a duplicate send of an unresolved kind is ignored');
+
+// Not in the bin before its day, found on it
+topUp(); state.day = 10;
+loadScenario('hopewell_block');
+clickChoice('mail bin');
+assert(els['narrative-text'].innerHTML.includes('Nothing under your name today'), 'letter is not in the bin before arriveDay');
+assert(wl.status === 'in_transit', 'checking early leaves the letter in transit');
+renderGear();
+assert(!els['gear-list'].innerHTML.includes('Housing'), 'gear panel never lists a letter in transit');
+topUp(); state.day = 11;
+loadScenario('hopewell_block');
+clickChoice('mail bin');
+assert(wl.status === 'read', 'letter picked up on arriveDay');
+assert(els['narrative-text'].innerHTML.includes('respond by day 14'), 'the letter shows its response day');
+renderGear();
+assert(els['gear-list'].innerHTML.includes('Housing letter — respond by day 14'), 'gear panel shows the read letter and its deadline');
+
+// Put off, then answered by phone before the deadline
+clickChoice('Deal with it later');
+assert(choiceTexts().some(t => t.includes('housing letter')), 'the block offers the read letter again');
+clickChoice('housing letter');
+const callBtn = els['choices-list'].children.find(b => b.textContent.includes('Call the number'));
+assert(callBtn && callBtn.disabled && callBtn.textContent.includes('No phone minutes'), 'no phone: the call renders disabled');
+state.timeHour = 8;
+loadScenario('letter_waitlist');
+const walkBtn = els['choices-list'].children.find(b => b.textContent.includes('housing office'));
+assert(walkBtn && walkBtn.disabled, 'the housing office walk is closed before 9');
+state.flags.hasPhone = true; state.flags.phoneExpiryDay = 30; state.timeHour = 10;
+loadScenario('letter_waitlist');
+clickChoice('Call the number');
+assert(wl.status === 'resolved' && state.flags.onHousingList === true, 'calling resolves the letter and keeps you on the list');
+for (let i = 0; i < 5; i++) advanceDay();
+assert(!wl.missed && !state.flags.waitlistDropped, 'a resolved letter never misses its deadline');
+renderGear();
+assert(els['gear-list'].innerHTML.includes('Housing waitlist (active)') && !els['gear-list'].innerHTML.includes('Housing letter'), 'gear panel shows the active waitlist, not the letter');
+loadScenario('hopewell_block');
+assert(!choiceTexts().some(t => t.includes('housing letter')), 'a resolved letter drops off the block');
+
+// The walk resolves it too
+mailSetup(); sendLetter('waitlist_confirm'); state.day = 11;
+loadScenario('hopewell_block');
+clickChoice('mail bin');
+clickChoice('housing office');
+assert(findLetter('waitlist_confirm').status === 'resolved' && state.flags.onHousingList, 'walking to the office resolves the letter');
+
+// Deadline passes unread: the drop happens anyway, exactly once
+mailSetup(); sendLetter('waitlist_confirm');
+const unread = findLetter('waitlist_confirm');
+state.day = 13; advanceDay(); // day 14: the deadline day itself is still on time
+assert(!unread.missed, 'not missed on the deadline day');
+advanceDay(); // day 15
+assert(unread.missed && state.flags.waitlistDropped === true, 'deadline passing unread sets missed and drops you from the list');
+assert(unread.status === 'in_transit', 'the drop does not mark the letter read');
+renderGear();
+assert(!els['gear-list'].innerHTML.includes('Housing'), 'gear panel does not reveal the drop before the letter is read');
+state.flags.waitlistDropped = false;
+advanceDay(); advanceDay();
+assert(state.flags.waitlistDropped === false, 'onMissed runs only once');
+state.flags.waitlistDropped = true;
+
+// Picking up an already-missed letter
+topUp(); state.timeHour = 10; state.mental = 80;
+loadScenario('hopewell_block');
+clickChoice('mail bin');
+assert(unread.status === 'read', 'a missed letter is still picked up');
+assert(els['narrative-text'].innerHTML.includes('already passed'), 'a missed letter shows the missed variant');
+assert(!choiceTexts().some(t => t.includes('Call the number') || t.includes('housing office') || t.includes('Deal with it later')), 'a missed letter offers no way to respond');
+clickChoice('move on');
+assert(Math.abs(state.mental - 70) < 0.5, 'a missed letter costs mental fortitude (now ' + state.mental.toFixed(1) + ')');
+renderGear();
+assert(els['gear-list'].innerHTML.includes('Housing waitlist (dropped)') && !els['gear-list'].innerHTML.includes('Housing letter'), 'gear panel shows the dropped waitlist once read');
+assert(!choiceTexts().some(t => t.includes('housing letter')), 'a missed letter is not offered on the block');
+
+// Saves: the queue round-trips, and an old save with no mailbox loads
+mailSetup(); sendLetter('waitlist_confirm');
+saveGame();
+state.mailbox = [];
+continueGame();
+assert(Array.isArray(state.mailbox) && state.mailbox.length === 1 && state.mailbox[0].deadlineDay === 14, 'mailbox survives a JSON round trip');
+const oldSave = JSON.parse(localStorage.getItem('the-streets-save'));
+delete oldSave.mailbox;
+localStorage.setItem('the-streets-save', JSON.stringify(oldSave));
+state.mailbox = undefined;
+continueGame();
+assert(Array.isArray(state.mailbox) && state.mailbox.length === 0, 'an old save with no mailbox loads with an empty queue');
+
+// An empty bin after the ID never points back at the DMV
+mailSetup(); state.flags.hasBirthCert = true;
+loadScenario('hopewell_no_mail');
+assert(!els['narrative-text'].innerHTML.includes('DMV'), 'empty bin with ID and birth certificate does not mention the DMV');
+state.mailbox = [];
+
 console.log(failures === 0 ? '\nALL TESTS PASSED' : '\n' + failures + ' FAILURES');
 process.exit(failures === 0 ? 0 : 1);
