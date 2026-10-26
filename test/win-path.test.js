@@ -104,12 +104,33 @@ loadScenario('clothing_closet');
 clickChoice('thrift store');
 assert(state.hasCleanClothes === true, 'clean clothes obtained');
 
-// 6. Victory once cash >= WIN_CASH_GOAL
+// 6. Money alone no longer wins — the lease has to be applied for and signed
 topUp();
 state.cash = WIN_CASH_GOAL;
+assert(checkGameStatus() === 'CONTINUE', '$' + WIN_CASH_GOAL + ' + ID + clothes is not a win by itself');
+state.flags.hasPhone = true; state.flags.phoneExpiryDay = state.day + 30;
+loadScenario('hopewell_block');
+clickChoice('rental listings');
+assert(els['narrative-text'].innerHTML.includes('Riverside Commons') && els['narrative-text'].innerHTML.includes('Alder'), 'the listings screen shows both places');
+const origRandomWin = Math.random;
+Math.random = () => 0.01; // force approval: the roll lands under any non-zero chance
+clickChoice('apply in person');
+Math.random = origRandomWin;
+assert(state.applications.length === 1 && state.applications[0].status === 'pending' && state.applications[0].outcome === 'approved', 'applied in person; the approval is rolled but still sealed');
+assert(Math.abs(state.cash - (WIN_CASH_GOAL - 35)) < 0.01, 'the $35 fee came out of pocket cash');
+state.cash = WIN_CASH_GOAL;
+state.day = state.mailbox.find(l => l.kind === 'application_decision').arriveDay; topUp();
+loadScenario('hopewell_block');
+clickChoice('mail bin');
+assert(state.applications[0].status === 'approved', 'reading the letter opens the approval');
+assert(els['narrative-text'].innerHTML.includes("you're approved"), 'the approval letter reads as one');
+clickChoice('leasing office');
+assert(els['narrative-text'].innerHTML.includes('signature page'), 'at the leasing office');
+clickChoice('Sign.');
+assert(state.flags.signedLease === true && state.applications[0].status === 'signed', 'the lease is signed');
+assert(Math.abs(state.cash - 0) < 0.01, 'signing paid the full move-in');
 assert(checkGameStatus().startsWith('VICTORY'), 'checkGameStatus reports VICTORY');
-renderStats();
-assert(els['narrative-text'].innerHTML.includes('VICTORY'), 'victory screen rendered');
+assert(els['narrative-text'].innerHTML.includes('VICTORY'), 'victory screen rendered by the loadScenario guard');
 
 // Regression: victory must survive the real gameplay path — loadScenario used to
 // render the victory screen and then immediately overwrite it with a new scenario
@@ -825,7 +846,7 @@ assert(els['choices-list'].children.some(b => b.textContent.includes('ready for 
 state.cash = 1200;
 assert(checkGameStatus() === 'CONTINUE', '$1200 no longer signs a lease');
 state.cash = WIN_CASH_GOAL;
-assert(checkGameStatus().startsWith('VICTORY'), '$' + WIN_CASH_GOAL + ' does');
+assert(checkGameStatus() === 'CONTINUE', '$' + WIN_CASH_GOAL + ' alone does not either — a lease has to be signed');
 state.cash = 100; state.hasID = false; state.hasCleanClothes = false;
 
 // --- Paycheck lag: pay is weekly and runs a period in arrears ---
@@ -1030,11 +1051,16 @@ loadScenario('rent_room');
 const motelBtn = els['choices-list'].children.find(b => b.textContent.includes('room at the budget motel'));
 assert(motelBtn && motelBtn.disabled, 'no account, no card — the balance field alone buys nothing');
 
-// The win check counts both sides of the ledger
-state.cash = 1000; state.flags.bankBalance = 1400;
+// The signing desk counts both sides of the ledger
+state.cash = 1000; state.flags.bankBalance = 1400; state.flags.hasBankAccount = true;
 state.hasID = true; state.hasCleanClothes = true;
 topUp();
-assert(checkGameStatus().startsWith('VICTORY'), 'lease money can live in the bank');
+state.applications = [{ id: 'managed_1', tier: 'managed', appliedDay: 1, outcome: 'approved', reasons: [], status: 'approved' }];
+state.mailbox = [{ id: 'application_decision_1_managed_1', kind: 'application_decision', ref: 'managed_1', address: 'hopewell', sentDay: 1, arriveDay: 3, deadlineDay: state.day + 2, status: 'read', missed: false }];
+loadScenario('lease_signing');
+clickChoice('Sign.');
+assert(checkGameStatus().startsWith('VICTORY') && state.cash === 0 && state.flags.bankBalance === 0, 'lease money can live in the bank: $1000 cash + $1400 card signs');
+state.flags.signedLease = false; state.applications = []; state.mailbox = [];
 state.flags.bankBalance = 500; state.cash = 100;
 renderStats();
 assert(els['check-cash'].textContent.includes('$600'), 'goal checklist shows pocket and bank combined');
@@ -1320,6 +1346,312 @@ assert(Array.isArray(state.citations) && state.citations.length === 0, 'an old s
 advanceDay();
 assert(true, 'advanceDay runs on a normalized old save');
 state.citations = []; state.mailbox = [];
+
+
+// --- Rental applications: the lease is the win ---
+function appSetup() {
+    state.mode = 'goal'; state.timeModifier = 1.0; state.day = 5; // autumn
+    state.flags = { hasMailingAddress: true, hasPhone: true, phoneExpiryDay: 60, hasBankAccount: true, bankBalance: 0 };
+    state.hasID = true; state.hasCleanClothes = true;
+    state.mailbox = []; state.citations = []; state.applications = [];
+    topUp(); state.cash = 0;
+}
+function decisionLetter(app) { return state.mailbox.find(l => l.ref === app.id); }
+function readDecision(app) {
+    state.day = Math.max(state.day, decisionLetter(app).arriveDay); topUp();
+    loadScenario('hopewell_block');
+    clickChoice('mail bin');
+}
+
+// Only a signed lease wins; endless mode never does
+appSetup(); state.cash = WIN_CASH_GOAL;
+assert(checkGameStatus() === 'CONTINUE', 'goal mode: money, ID, and clothes do not win without a lease');
+state.flags.signedLease = true;
+assert(checkGameStatus().startsWith('VICTORY'), 'goal mode: a signed lease wins');
+state.mode = 'endless';
+assert(checkGameStatus() === 'CONTINUE', 'endless mode never wins, even with signedLease set');
+loadScenario('hopewell_block');
+assert(!els['choices-list'].children.some(b => b.textContent.includes('rental listings')), 'endless mode has no listings screen');
+state.mode = 'goal'; state.flags.signedLease = false; state.timeHour = 20;
+loadScenario('hopewell_block');
+const lateListings = els['choices-list'].children.find(b => b.textContent.includes('rental listings'));
+assert(lateListings && lateListings.disabled && lateListings.textContent.includes('Library closed'), 'the listings computer keeps library hours — closed, not hidden');
+state.timeHour = 10;
+
+// Managed tier: no job or fewer than two stubs is an automatic income denial
+appSetup();
+state.flags.hasJob = true; state.flags.payStubs = 1; state.flags.bankBalance = 100;
+let score = scoreApplication('managed');
+assert(score.chance === 0 && score.reasons.join() === 'income', 'managed: one pay stub scores zero with reason income');
+Math.random = () => 0.01; // best possible roll — still denied at chance 0
+const denied = submitApplication('managed');
+Math.random = origRandom;
+assert(denied.outcome === 'denied' && denied.reasons.join() === 'income' && denied.status === 'pending', 'managed with one stub is denied even on the best roll');
+assert(Math.abs(state.flags.bankBalance - 45) < 0.01 && state.cash === 0, 'the card-only fee comes off the bank balance');
+assert(decisionLetter(denied) && decisionLetter(denied).arriveDay === 7 && decisionLetter(denied).deadlineDay === 10, 'a decision letter is mailed: 2 days out, 3 to respond');
+state.flags.payStubs = 2;
+score = scoreApplication('managed');
+assert(Math.abs(score.chance - 0.70) < 1e-9 && score.reasons.join() === 'references', 'managed: job + 2 stubs, no references = 0.85 - 0.15');
+state.flags.hasCollections = true; state.flags.hasPamelaReference = true;
+score = scoreApplication('managed');
+assert(Math.abs(score.chance - 0.35) < 1e-9 && score.reasons.join() === 'collections', 'managed: collections costs 0.50; a reference clears the references reason');
+state.flags.hasCollections = false; state.flags.hasPamelaReference = false;
+
+// Small landlord scoring
+score = scoreApplication('smallLandlord');
+assert(Math.abs(score.chance - 0.60) < 1e-9 && score.reasons.length === 0, 'walk-up: job + stubs = 0.60');
+state.flags.hasPamelaReference = true; state.flags.returned_wallet = true;
+score = scoreApplication('smallLandlord');
+assert(Math.abs(score.chance - 0.90) < 1e-9, 'walk-up: two references add 0.30');
+state.flags.hasJob = false;
+score = scoreApplication('smallLandlord');
+assert(Math.abs(score.chance - 0.45) < 1e-9 && score.reasons.join() === 'income', 'walk-up: no job = 0.15 base + references, reason income');
+state.flags.hasCollections = true;
+score = scoreApplication('smallLandlord');
+assert(Math.abs(score.chance - 0.25) < 1e-9 && score.reasons.join() === 'income,collections', 'walk-up: collections costs 0.20');
+state.flags.hasCollections = false; state.flags.hasPamelaReference = false; state.flags.returned_wallet = false;
+
+// The gear list keeps the sealed outcome sealed
+renderGear();
+assert(els['gear-list'].innerHTML.includes('Rental application — Riverside Commons (waiting to hear)'), 'gear shows a pending application as waiting');
+assert(!els['gear-list'].innerHTML.includes('enied') && !els['gear-list'].innerHTML.includes('Approved'), 'gear never shows the outcome before the letter is read');
+
+// One active application per tier
+const dup = submitApplication('managed');
+assert(dup === null && state.applications.length === 1 && Math.abs(state.flags.bankBalance - 45) < 0.01, 'a second managed application is refused and charges no fee');
+loadScenario('apartment_listings');
+assert(!els['choices-list'].children.some(b => b.textContent.includes('Riverside')), 'the listings hide a tier with an application pending');
+assert(els['narrative-text'].innerHTML.includes('application at Riverside Commons is in'), 'the listings note the pending application');
+
+// A denial lists its reasons and never fires onMissed
+readDecision(denied);
+assert(els['narrative-text'].innerHTML.includes('denied') && els['narrative-text'].innerHTML.includes('insufficient verifiable income'), 'the denial letter spells out the reason');
+assert(denied.status === 'denied' && decisionLetter(denied).status === 'resolved', 'reading a denial resolves the letter');
+assert(!els['choices-list'].children.some(b => b.textContent.includes('leasing office')), 'a denial offers no signing');
+for (let i = 0; i < 10; i++) advanceDay();
+assert(denied.status === 'denied' && !decisionLetter(denied).missed, 'a denial never expires');
+assert(activeApplication('managed') === null, 'after a denial the tier is open again');
+
+// Listings gates: card, balance, phone
+appSetup(); state.flags.bankBalance = 10; state.cash = 10;
+loadScenario('apartment_listings');
+let online = els['choices-list'].children.find(b => b.textContent.includes('Riverside'));
+assert(online && online.disabled && online.textContent.includes('Requires $55.00 on the card'), 'online needs $55 on the card');
+state.flags.hasBankAccount = false;
+loadScenario('apartment_listings');
+online = els['choices-list'].children.find(b => b.textContent.includes('Riverside'));
+assert(online && online.disabled && online.textContent.includes('only takes a card'), 'online needs a card');
+state.flags.hasBankAccount = true; state.flags.bankBalance = 100;
+loadScenario('apartment_listings');
+const walkUp = els['choices-list'].children.find(b => b.textContent.includes('Alder'));
+assert(walkUp && walkUp.disabled && walkUp.textContent.includes('Requires $35.00'), 'in person needs $35 cash');
+state.cash = 35; state.flags.hasPhone = false;
+loadScenario('apartment_listings');
+online = els['choices-list'].children.find(b => b.textContent.includes('Riverside'));
+assert(online && online.disabled && online.textContent.includes('working phone'), 'online needs a phone');
+assert(els['choices-list'].children.find(b => b.textContent.includes('Alder')).textContent.includes('working phone'), 'in person needs a phone too');
+state.flags.hasPhone = true; state.timeHour = 18;
+loadScenario('apartment_listings');
+assert(els['choices-list'].children.find(b => b.textContent.includes('Alder')).textContent.includes('after 5'), 'in person keeps hours');
+state.timeHour = 10;
+Math.random = () => 0.01; // force approval
+clickChoice('Riverside');
+Math.random = origRandom;
+assert(Math.abs(state.flags.bankBalance - 45) < 0.01 && Math.abs(state.cash - 35) < 0.01, 'online fee from the card, pocket cash untouched');
+
+// An approval read in time: the checklist, the gear line, and the signing
+appSetup(); state.flags.hasJob = true; state.flags.payStubs = 2; state.cash = 35;
+Math.random = () => 0.01; // force approval
+const okApp = submitApplication('smallLandlord');
+Math.random = origRandom;
+assert(okApp.outcome === 'approved' && Math.abs(state.cash - 0) < 0.01, 'walk-up approved; $35 fee from cash');
+renderStats();
+assert(els['check-lease'].textContent === '[ ] Get approved and sign a lease', 'checklist: lease line open while sealed');
+readDecision(okApp);
+assert(okApp.status === 'approved', 'approval opened');
+renderStats();
+assert(els['check-lease'].textContent.includes('[~] Approved at the walk-up on Alder') && els['check-lease'].textContent.includes('day ' + decisionLetter(okApp).deadlineDay), 'checklist shows the approval and its sign-by day');
+assert(els['gear-list'].innerHTML.includes('Approved: the walk-up on Alder — sign by day ' + decisionLetter(okApp).deadlineDay + ' ($2400 move-in)'), 'gear shows the approval');
+let signBtn = els['choices-list'].children.find(b => b.textContent.includes('leasing office'));
+assert(signBtn && signBtn.disabled && signBtn.textContent.includes('Requires $2400'), 'signing needs the move-in money');
+state.cash = WIN_CASH_GOAL; state.hasCleanClothes = false;
+loadScenario('letter_application');
+signBtn = els['choices-list'].children.find(b => b.textContent.includes('leasing office'));
+assert(signBtn && signBtn.disabled && signBtn.textContent.includes('clean clothes'), 'signing wants clean clothes');
+state.hasCleanClothes = true; state.timeHour = 18;
+loadScenario('hopewell_block');
+signBtn = els['choices-list'].children.find(b => b.textContent.includes('sign the lease'));
+assert(signBtn && signBtn.disabled && signBtn.textContent.includes('9 AM'), 'the block offers the signing too, with office hours');
+state.timeHour = 10;
+loadScenario('hopewell_block');
+clickChoice('sign the lease');
+clickChoice('Sign.');
+assert(state.flags.signedLease && okApp.status === 'signed' && decisionLetter(okApp).status === 'resolved' && state.cash === 0, 'signed from the block: paid, marked, letter resolved');
+assert(checkGameStatus().startsWith('VICTORY') && els['narrative-text'].innerHTML.includes('VICTORY'), 'victory');
+renderStats();
+assert(els['check-lease'].textContent === '[x] Get approved and sign a lease', 'checklist: lease line checked');
+
+// An approval read after its deadline has expired
+appSetup(); state.flags.hasJob = true; state.flags.payStubs = 2; state.cash = 35;
+Math.random = () => 0.01; // force approval
+const lateApp = submitApplication('smallLandlord');
+Math.random = origRandom;
+state.day = decisionLetter(lateApp).deadlineDay; advanceDay();
+assert(lateApp.status === 'expired' && decisionLetter(lateApp).missed, 'unread past the deadline: expired');
+renderGear();
+assert(els['gear-list'].innerHTML.includes('waiting to hear') && !els['gear-list'].innerHTML.includes('Approved'), 'gear still reads as waiting until the letter is opened');
+state.cash = WIN_CASH_GOAL;
+readDecision(lateApp);
+assert(els['narrative-text'].innerHTML.includes('next applicant'), 'the expired approval says the unit is gone');
+assert(!els['choices-list'].children.some(b => b.textContent.includes('leasing office')), 'no signing option on an expired approval');
+loadScenario('hopewell_block');
+assert(!els['choices-list'].children.some(b => b.textContent.includes('sign the lease')), 'the block offers no signing either');
+assert(activeApplication('smallLandlord') === null, 'an expired application frees the tier');
+renderGear();
+assert(!els['gear-list'].innerHTML.includes('Alder'), 'an expired application leaves the gear list');
+
+// A read approval that then lapses also expires
+appSetup(); state.flags.hasJob = true; state.flags.payStubs = 2; state.cash = 35;
+Math.random = () => 0.01; // force approval
+const lapsed = submitApplication('smallLandlord');
+Math.random = origRandom;
+readDecision(lapsed);
+assert(lapsed.status === 'approved', 'read in time');
+state.day = decisionLetter(lapsed).deadlineDay; advanceDay();
+assert(lapsed.status === 'expired' && approvedApplication() === null, 'an approval you sat on expires');
+
+// payStubs counts paydays that actually pay
+appSetup(); state.flags.hasJob = true; state.flags.pendingWages = 100; state.flags.nextPayday = state.day;
+workShift(50);
+assert(state.flags.payStubs === 1, 'a payday that pays out adds a stub');
+workShift(50);
+assert(state.flags.payStubs === 1, 'an ordinary shift does not');
+state.flags.pendingWages = 0; state.flags.nextPayday = state.day;
+workShift(50);
+assert(state.flags.payStubs === 1, 'a payday with nothing owed adds nothing');
+
+// Pamela's reference
+appSetup(); state.flags.metPamela = true; state.flags.motelDaysRemaining = 3;
+loadScenario('pamela_checkin');
+clickChoice('reference letter');
+assert(state.flags.hasPamelaReference === true, 'Pamela writes the reference');
+assert(!els['choices-list'].children.some(b => b.textContent.includes('reference letter')), 'she only needs to write it once');
+renderGear();
+assert(els['gear-list'].innerHTML.includes('Reference letter from Pamela'), 'gear lists the reference');
+
+// Saves
+appSetup(); state.flags.hasJob = true; state.flags.payStubs = 2; state.cash = 35;
+Math.random = () => 0.99; // force denial — the outcome is irrelevant here, but the roll must not float
+submitApplication('smallLandlord');
+Math.random = origRandom;
+saveGame();
+state.applications = [];
+continueGame();
+assert(state.applications.length === 1 && state.applications[0].tier === 'smallLandlord' && state.applications[0].status === 'pending', 'applications survive a JSON round trip');
+const preApp = JSON.parse(localStorage.getItem('the-streets-save'));
+delete preApp.applications;
+localStorage.setItem('the-streets-save', JSON.stringify(preApp));
+state.applications = undefined;
+continueGame();
+assert(Array.isArray(state.applications) && state.applications.length === 0, 'an old save with no applications loads');
+renderStats();
+assert(els['check-lease'].textContent === '[ ] Get approved and sign a lease', 'checklist renders on the old save');
+state.applications = []; state.mailbox = [];
+
+
+// --- Asking for more time to sign ---
+function approvedWalkUp() {
+    appSetup(); state.flags.hasJob = true; state.flags.payStubs = 2; state.cash = 35;
+    Math.random = () => 0.01; // force approval
+    const app = submitApplication('smallLandlord');
+    Math.random = origRandom;
+    readDecision(app);
+    return app;
+}
+function askChoice() { return els['choices-list'].children.find(b => b.textContent.includes('few more days')); }
+
+// The chance climbs with a job and references, capped at 0.90
+appSetup();
+assert(Math.abs(extensionChance() - 0.40) < 1e-9, 'extension chance: base 0.40');
+state.flags.hasJob = true;
+assert(Math.abs(extensionChance() - 0.60) < 1e-9, 'a job adds 0.20');
+state.flags.hasPamelaReference = true;
+assert(Math.abs(extensionChance() - 0.75) < 1e-9, 'one reference adds 0.15');
+state.flags.returned_wallet = true;
+assert(Math.abs(extensionChance() - 0.90) < 1e-9, 'two references reach the 0.90 cap');
+
+// Riverside Commons is a policy: refused on the best roll, deadline untouched
+appSetup(); state.flags.hasJob = true; state.flags.payStubs = 2; state.flags.bankBalance = 100;
+state.flags.hasPamelaReference = true; state.flags.returned_wallet = true;
+Math.random = () => 0.01;
+const managedApp = submitApplication('managed');
+Math.random = origRandom;
+readDecision(managedApp);
+const managedDeadline = decisionLetter(managedApp).deadlineDay;
+assert(askChoice() && !askChoice().disabled, 'the approval letter offers the call');
+Math.random = () => 0.01;
+clickChoice('few more days');
+Math.random = origRandom;
+assert(managedApp.extensionAsked === true && state.flags._extension.granted === false, 'managed: refused even on the best roll');
+assert(decisionLetter(managedApp).deadlineDay === managedDeadline, 'managed: deadline unchanged');
+assert(els['narrative-text'].innerHTML.includes('policy'), 'the leasing office reads you the policy');
+clickChoice('move on');
+assert(!askChoice(), 'one ask only: the block no longer offers the call');
+
+// The walk-up may say yes: +4 days, and the extended day still signs
+let app = approvedWalkUp();
+const origDeadline = decisionLetter(app).deadlineDay;
+Math.random = () => 0.01;
+clickChoice('few more days');
+Math.random = origRandom;
+assert(state.flags._extension.granted === true && state.flags._extension.newDay === origDeadline + 4, 'walk-up: granted, four more days');
+assert(decisionLetter(app).deadlineDay === origDeadline + 4, 'the letter deadline moved');
+assert(els['narrative-text'].innerHTML.includes('until day ' + (origDeadline + 4)), 'she names the new day');
+renderStats();
+assert(els['check-lease'].textContent.includes('sign by day ' + (origDeadline + 4)), 'checklist shows the extended day');
+assert(els['gear-list'].innerHTML.includes('sign by day ' + (origDeadline + 4)), 'gear shows the extended day');
+state.day = origDeadline; advanceDay(); // the old deadline passes
+assert(app.status === 'approved' && !decisionLetter(app).missed, 'past the old deadline the approval still stands (it would have expired without the extension)');
+clickChoice('move on');
+assert(!askChoice(), 'one ask only: no second call after a yes');
+state.day = origDeadline + 4; topUp(); state.cash = WIN_CASH_GOAL;
+loadScenario('hopewell_block');
+clickChoice('sign the lease');
+clickChoice('Sign.');
+assert(state.flags.signedLease && checkGameStatus().startsWith('VICTORY'), 'signing on the extended day wins');
+state.day = origDeadline + 5; state.flags.signedLease = false; advanceDay();
+assert(app.status === 'signed', 'a signed lease never expires');
+
+// The walk-up may say no: deadline untouched
+app = approvedWalkUp();
+const keptDeadline = decisionLetter(app).deadlineDay;
+Math.random = () => 0.99;
+clickChoice('few more days');
+Math.random = origRandom;
+assert(state.flags._extension.granted === false && decisionLetter(app).deadlineDay === keptDeadline && app.extensionAsked, 'walk-up: refused, deadline unchanged');
+assert(els['narrative-text'].innerHTML.includes('someone else'), 'she cannot hold it');
+clickChoice('move on');
+loadScenario('letter_application');
+assert(!askChoice(), 'one ask only: the letter no longer offers the call either');
+
+// No phone: the call is a door you can see
+app = approvedWalkUp();
+state.flags.hasPhone = false;
+loadScenario('hopewell_block');
+assert(askChoice() && askChoice().disabled && askChoice().textContent.includes("need to call them"), 'no phone: the call renders disabled with its label');
+
+// Old save: an application without extensionAsked loads and can still ask
+app = approvedWalkUp();
+delete app.extensionAsked;
+saveGame();
+continueGame();
+const loaded = state.applications[0];
+assert(loaded.extensionAsked === undefined && canAskExtension(), 'an old application without extensionAsked loads and may ask');
+Math.random = () => 0.99;
+requestExtension(loaded.id);
+Math.random = origRandom;
+assert(loaded.extensionAsked === true && !canAskExtension(), 'the ask is recorded on the old application');
+state.applications = []; state.mailbox = [];
 
 console.log(failures === 0 ? '\nALL TESTS PASSED' : '\n' + failures + ' FAILURES');
 process.exit(failures === 0 ? 0 : 1);

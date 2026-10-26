@@ -1,10 +1,10 @@
 // Build version, shown on the title screen (initTitleScreen). Scheme 1.0.x.y:
 // bump x for a gameplay/content feature, y for a fix or tuning pass.
-const GAME_VERSION = '1.0.26.0';
+const GAME_VERSION = '1.0.28.0';
 
-// Winning means signing a lease: first month, deposit, and the application
-// fees nobody warns you about. Referenced by checkGameStatus and the sidebar
-// checklist; the title-screen copy in index.html states the same number.
+// Signing a lease costs this much up front: first month, deposit, and the
+// application fees nobody warns you about. Paid in lease_signing; shown in the
+// sidebar checklist; the title-screen copy in index.html states the same number.
 const WIN_CASH_GOAL = 2400;
 
 // State
@@ -32,6 +32,9 @@ let state = {
     mailbox: [],
     // Tickets the player owes on. Plain data; see issueCitation / processCitations.
     citations: [],
+    // Rental applications. Plain data; see submitApplication. The outcome is
+    // rolled at apply time and stays hidden until the decision letter is read.
+    applications: [],
     hasID: false,
     hasCleanClothes: false,
     flags: {
@@ -131,6 +134,7 @@ function continueGame() {
     if (!state.lastSeenDay || typeof state.lastSeenDay !== 'object') state.lastSeenDay = {};
     if (!Array.isArray(state.mailbox)) state.mailbox = []; // saves before 1.0.25.0 have no mail queue
     if (!Array.isArray(state.citations)) state.citations = []; // saves before 1.0.26.0 have no citations
+    if (!Array.isArray(state.applications)) state.applications = []; // saves before 1.0.27.0 have no applications
 
     recomputeTimeModifier();     // timeModifier is derived from flags, never trusted from the save
 
@@ -233,12 +237,10 @@ function checkGameStatus() {
         return "GAME OVER: " + reason + " You survived " + state.day + " days.";
     }
 
-    // 2. Check for Win (Only in Goal Mode)
-    if (state.mode === "goal") {
-        // The lease money can live in either pocket — the mattress or the bank
-        if (state.cash + (state.flags.bankBalance || 0) >= WIN_CASH_GOAL && state.hasID && state.hasCleanClothes) {
-            return "VICTORY: You secured a lease on a small apartment. You broke the cycle.";
-        }
+    // 2. Check for Win (Only in Goal Mode). Money, ID, and clothes are gates on
+    // the signing scene (lease_signing); only a signed lease ends the game.
+    if (state.mode === "goal" && state.flags.signedLease) {
+        return "VICTORY: You secured a lease on a small apartment. You broke the cycle.";
     }
 
     return "CONTINUE";
@@ -393,6 +395,139 @@ function payCitation(id) {
         if (l.ref === id) l.status = 'resolved';
     }
     state.flags.hasCollections = state.citations.some(x => x.status === 'collections');
+}
+
+// Rental applications: the Goal-mode endgame. Each tier is a landlord with its
+// own screening; scoreApplication turns what the player has (a job, pay stubs,
+// references, a collections record) into a chance, rolled once at apply time.
+// The outcome rides in the mail (application_decision) and is hidden until read.
+// Scoring constants were set by design — don't tune.
+const APPLICATION_TIERS = {
+    managed: { label: 'Riverside Commons', fee: 55, cardOnly: true },
+    smallLandlord: { label: 'the walk-up on Alder', fee: 35, cardOnly: false }
+};
+
+function referenceCount() {
+    return (state.flags.hasPamelaReference ? 1 : 0) + (state.flags.returned_wallet ? 1 : 0);
+}
+
+function scoreApplication(tier) {
+    const reasons = [];
+    const stubs = state.flags.payStubs || 0;
+    const employed = !!state.flags.hasJob;
+    let chance;
+    if (tier === 'managed') {
+        if (!employed || stubs < 2) {
+            chance = 0;
+            reasons.push('income');
+        } else {
+            chance = 0.85;
+            if (state.flags.hasCollections) { chance -= 0.50; reasons.push('collections'); }
+            if (referenceCount() === 0) { chance -= 0.15; reasons.push('references'); }
+        }
+    } else {
+        if (employed && stubs >= 1) {
+            chance = 0.60;
+        } else {
+            chance = 0.15;
+            reasons.push('income');
+        }
+        if (state.flags.hasCollections) { chance -= 0.20; reasons.push('collections'); }
+        chance += 0.15 * referenceCount();
+    }
+    return { chance: Math.max(0, Math.min(0.95, chance)), reasons };
+}
+
+function findApplication(id) {
+    return (state.applications || []).find(a => a.id === id) || null;
+}
+
+// The decision letter for an application, if one was sent
+function applicationLetter(app) {
+    return (state.mailbox || []).find(l => l.ref === app.id) || null;
+}
+
+// An application still in play at this tier: pending, or approved and unsigned
+function activeApplication(tier) {
+    return (state.applications || []).find(a => a.tier === tier && (a.status === 'pending' || a.status === 'approved')) || null;
+}
+
+// An approval the player has read and can still act on
+function approvedApplication() {
+    return (state.applications || []).find(a => {
+        if (a.status !== 'approved') return false;
+        const l = applicationLetter(a);
+        return !(l && l.missed);
+    }) || null;
+}
+
+// Pays the fee, rolls the decision, mails it. Returns the application, or null
+// if one is already pending or approved at that tier (no fee charged).
+function submitApplication(tier) {
+    if (!Array.isArray(state.applications)) state.applications = [];
+    if (activeApplication(tier)) return null;
+    const def = APPLICATION_TIERS[tier];
+    if (def.cardOnly) {
+        state.flags.bankBalance = roundCents((state.flags.bankBalance || 0) - def.fee);
+    } else {
+        state.cash = roundCents(state.cash - def.fee);
+    }
+    const { chance, reasons } = scoreApplication(tier);
+    const approved = Math.random() < chance;
+    let id = `${tier}_${state.day}`;
+    for (let n = 2; state.applications.some(a => a.id === id); n++) id = `${tier}_${state.day}_${n}`;
+    const app = {
+        id, tier,
+        appliedDay: state.day,
+        outcome: approved ? 'approved' : 'denied',
+        reasons: approved ? [] : reasons,
+        status: 'pending',
+        extensionAsked: false // one ask for more time per application
+    };
+    state.applications.push(app);
+    sendLetter('application_decision', id);
+    return app;
+}
+
+// Asking for more time to sign. A small landlord is a person and may say yes;
+// Riverside Commons is a policy and always says no. One ask per application.
+// The deadline lives on the mailbox item, so a granted extension just moves
+// deadlineDay and processMailDeadlines, the gear line, and the checklist all
+// pick it up unchanged. Constants were set by design — don't tune.
+const EXTENSION_DAYS = 4;
+const EXTENSION_BASE = 0.40;
+const EXTENSION_JOB_BONUS = 0.20;
+const EXTENSION_REF_BONUS = 0.15; // per reference
+
+function extensionChance() {
+    const c = EXTENSION_BASE + (state.flags.hasJob ? EXTENSION_JOB_BONUS : 0) + EXTENSION_REF_BONUS * referenceCount();
+    return Math.max(0, Math.min(0.90, c));
+}
+
+// The application the player can still ask about: approved, unsigned, unmissed, not yet asked
+function canAskExtension() {
+    const app = approvedApplication();
+    return !!(app && !(app.extensionAsked || false));
+}
+
+// The application behind the letter being read (flags._letterId, set at the mail bin)
+function letterApplication() {
+    const letter = (state.mailbox || []).find(l => l.id === state.flags._letterId);
+    return letter ? findApplication(letter.ref) : null;
+}
+
+function requestExtension(appId) {
+    const app = findApplication(appId);
+    if (!app) return null;
+    app.extensionAsked = true;
+    const letter = applicationLetter(app);
+    let granted = false;
+    if (app.tier === 'smallLandlord' && letter && Math.random() < extensionChance()) {
+        letter.deadlineDay += EXTENSION_DAYS;
+        granted = true;
+    }
+    state.flags._extension = { granted, newDay: letter ? letter.deadlineDay : null, tier: app.tier };
+    return state.flags._extension;
 }
 
 // Seasons: derived entirely from state.day — no new save fields, so old saves
@@ -644,6 +779,7 @@ function workShift(gross) {
                 state.cash = Math.round((state.cash + (amount - fee)) * 100) / 100;
             }
             state.flags._paycheck = { amount, fee, banked };
+            state.flags.payStubs = (state.flags.payStubs || 0) + 1; // proof of income for a rental application
         }
         state.flags.pendingWages = 0;
         // A long gap between shifts can't leave payday stuck in the past
@@ -1074,7 +1210,12 @@ function loadScenario(id) {
                 // check: generic gate for what the other keys can't express (a
                 // closed intake window). hidden = knowledge you don't have;
                 // a disabled check = a door you can see but can't open.
-                if (choice.requires.check !== undefined && !choice.requires.check()) { reqMet = false; reqMsg = choice.requires.checkLabel || '(Unavailable)'; }
+                // checkLabel may be a function when one check has several reasons to fail
+                if (choice.requires.check !== undefined && !choice.requires.check()) {
+                    reqMet = false;
+                    const label = typeof choice.requires.checkLabel === 'function' ? choice.requires.checkLabel() : choice.requires.checkLabel;
+                    reqMsg = label || '(Unavailable)';
+                }
             }
 
             if (reqMet) {
@@ -1208,6 +1349,19 @@ function renderGear() {
         items.push('Housing waitlist (dropped)');
     }
 
+    // Applications: the outcome stays hidden until the decision letter is read,
+    // so anything with an unread letter reads as waiting, whatever it really is
+    for (const app of (state.applications || [])) {
+        const label = APPLICATION_TIERS[app.tier].label;
+        const letter = applicationLetter(app);
+        if (letter && letter.status === 'in_transit') {
+            items.push(`Rental application — ${label} (waiting to hear)`);
+        } else if (app.status === 'approved' && letter && !letter.missed) {
+            items.push(`Approved: ${label} — sign by day ${letter.deadlineDay} ($${WIN_CASH_GOAL} move-in)`);
+        }
+    }
+    if (state.flags.hasPamelaReference) items.push('Reference letter from Pamela');
+
     // Citations show what the player last saw (knownAmount), never the live amount
     for (const c of unpaidCitations()) {
         const known = c.knownAmount || 0;
@@ -1294,6 +1448,12 @@ function renderStats() {
                 : '[ ] Obtain state-issued ID';
         document.getElementById('check-clothes').textContent =
             (state.hasCleanClothes ? '[x]' : '[ ]') + ' Secure clean clothes';
+        const approval = approvedApplication();
+        document.getElementById('check-lease').textContent = state.flags.signedLease
+            ? '[x] Get approved and sign a lease'
+            : approval
+                ? `[~] Approved at ${APPLICATION_TIERS[approval.tier].label} — sign by day ${applicationLetter(approval).deadlineDay}`
+                : '[ ] Get approved and sign a lease';
     }
     
     // Update endless mode UI

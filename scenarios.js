@@ -68,8 +68,49 @@ const LETTER_KINDS = {
     citation_delinquent: {
         travelDays: 3, respondDays: null,
         pickupScenario: 'letter_citation'
+    },
+    // A rental decision. The deadline only matters for approvals: a denial is
+    // resolved the moment it's read, so its deadline never fires.
+    application_decision: {
+        travelDays: 2, respondDays: 3,
+        pickupScenario: 'letter_application',
+        onMissed: (item) => {
+            const app = findApplication(item.ref);
+            if (app && app.outcome === 'approved' && app.status !== 'signed') app.status = 'expired';
+        }
     }
 };
+
+// Signing a lease: the same gates whether you go from the letter or the block.
+// Money, ID, and clothes used to be the win check; now they're the door to it.
+const SIGN_LEASE_REQUIRES = {
+    funds: WIN_CASH_GOAL,
+    check: () => state.hasID && state.hasCleanClothes && state.timeHour >= 9 && state.timeHour <= 17,
+    checkLabel: () => !state.hasID ? "(Bring the ID)" // TODO: copy
+        : !state.hasCleanClothes ? "(You'd want clean clothes for this)"
+        : '(Leasing office: 9 AM–5 PM)'
+};
+function canSignLease() {
+    return !!approvedApplication();
+}
+
+// The one phone call that can move a sign-by date. getApp picks which
+// approval is meant: the letter in hand, or whichever approval is open.
+function askExtensionChoice(getApp) {
+    return {
+        text: "Call and ask for a few more days.", // TODO: copy
+        hidden: () => {
+            const app = getApp();
+            return !(app && app.status === 'approved' && !(app.extensionAsked || false) && canAskExtension());
+        },
+        requires: { check: phoneActive, checkLabel: "(You'd need to call them)" },
+        customAction: () => {
+            requestExtension(getApp().id);
+            applyEffects({ timePassed: 0.3 });
+            loadScenario('extension_result');
+        }
+    };
+}
 
 // Travel to the clerk's window — shared by idle_time and hopewell_block.
 // Only on offer while something is owed; the window keeps eight-to-four hours.
@@ -1094,6 +1135,22 @@ const scenarios = [
                 nextScenario: 'letter_waitlist'
             },
             {
+                text: "Look at rental listings on a library computer.", // TODO: copy
+                hidden: () => !(state.mode === 'goal' && state.hasID),
+                // Same hours as the other library computer: a known door, closed at night
+                requires: { check: () => state.timeHour >= 9 && state.timeHour <= 19, checkLabel: '(Library closed)' },
+                effects: { timePassed: 0.1 },
+                nextScenario: 'apartment_listings'
+            },
+            {
+                text: "Go sign the lease (30 min).", // TODO: copy
+                hidden: () => !canSignLease(),
+                requires: SIGN_LEASE_REQUIRES,
+                effects: { timePassed: 0.5 },
+                nextScenario: 'lease_signing'
+            },
+            askExtensionChoice(approvedApplication),
+            {
                 text: "Take a seat at a library computer.",
                 hidden: () => !(state.mode === 'goal' && state.flags.hasMailingAddress && !state.flags.birthCertOrdered && !state.hasID && state.timeHour >= 9 && state.timeHour <= 19),
                 effects: { timePassed: 0.1 },
@@ -1269,6 +1326,177 @@ const scenarios = [
         ]
     },
     {
+        // The listings screen: two landlords, two kinds of screening. The lines
+        // under each show what the player knows about themselves — never the
+        // odds, and never collections (they may not know their own record).
+        id: 'apartment_listings',
+        notRandom: true,
+        text: () => {
+            const stubs = state.flags.payStubs || 0;
+            const refs = referenceCount();
+            const job = state.flags.hasJob ? 'a job' : 'no job'; // TODO: copy
+            const stubLine = `${stubs} pay stub${stubs === 1 ? '' : 's'}`; // TODO: copy
+            const refLine = `${refs} reference${refs === 1 ? '' : 's'}`; // TODO: copy
+            let t = `Two listings you could actually afford to apply for. ${APPLICATION_TIERS.managed.label}, a managed complex: online application, $${APPLICATION_TIERS.managed.fee} fee by card, proof of income (two recent pay stubs) and references. You have ${job}, ${stubLine}, ${refLine}.`; // TODO: copy
+            t += ` ${APPLICATION_TIERS.smallLandlord.label.charAt(0).toUpperCase() + APPLICATION_TIERS.smallLandlord.label.slice(1)}, a private landlord: apply in person, $${APPLICATION_TIERS.smallLandlord.fee} cash, wants to see steady work or someone who'll vouch for you. Same ${job}, ${stubLine}, ${refLine}.`; // TODO: copy
+            for (const tier of Object.keys(APPLICATION_TIERS)) {
+                const app = activeApplication(tier);
+                if (app && app.status === 'pending') t += ` Your application at ${APPLICATION_TIERS[tier].label} is in — the decision comes by mail.`; // TODO: copy
+            }
+            return t;
+        },
+        choices: [
+            {
+                text: `Apply online at ${APPLICATION_TIERS.managed.label} ($${APPLICATION_TIERS.managed.fee}, card only).`,
+                hidden: () => !!activeApplication('managed'),
+                requires: {
+                    check: () => state.flags.hasMailingAddress && state.flags.hasBankAccount
+                        && (state.flags.bankBalance || 0) >= APPLICATION_TIERS.managed.fee && phoneActive(),
+                    checkLabel: () => !state.flags.hasMailingAddress ? '(They need an address to mail the decision to)' // TODO: copy
+                        : !state.flags.hasBankAccount ? '(The form only takes a card)'
+                        : (state.flags.bankBalance || 0) < APPLICATION_TIERS.managed.fee ? `(Requires $${APPLICATION_TIERS.managed.fee.toFixed(2)} on the card)`
+                        : '(The form asks for a working phone number)'
+                },
+                customAction: () => {
+                    submitApplication('managed');
+                    applyEffects({ timePassed: 0.5 });
+                    loadScenario('apartment_listings');
+                }
+            },
+            {
+                text: `Walk to ${APPLICATION_TIERS.smallLandlord.label} and apply in person ($${APPLICATION_TIERS.smallLandlord.fee} cash, 1 hr).`,
+                hidden: () => !!activeApplication('smallLandlord'),
+                requires: {
+                    cash: APPLICATION_TIERS.smallLandlord.fee,
+                    check: () => state.flags.hasMailingAddress && phoneActive() && state.timeHour >= 9 && state.timeHour <= 17,
+                    checkLabel: () => !state.flags.hasMailingAddress ? '(They need an address to mail the decision to)' // TODO: copy
+                        : !phoneActive() ? '(The form asks for a working phone number)'
+                        : '(Nobody answers the door after 5)' // TODO: copy
+                },
+                customAction: () => {
+                    submitApplication('smallLandlord');
+                    applyEffects({ timePassed: 1 });
+                    loadScenario('apartment_listings');
+                }
+            },
+            { text: "Leave.", nextScenario: null }
+        ]
+    },
+    {
+        // The decision, read at the mail bin (flags._letterId). Reading is what
+        // moves the application out of 'pending'; a denial also resolves the
+        // letter so its deadline never fires.
+        id: 'letter_application',
+        notRandom: true,
+        onLoad: () => {
+            const letter = (state.mailbox || []).find(l => l.id === state.flags._letterId);
+            const app = letter ? findApplication(letter.ref) : null;
+            if (!app) return;
+            if (app.outcome === 'denied') {
+                app.status = 'denied';
+                letter.status = 'resolved';
+            } else if (letter.missed) {
+                app.status = 'expired';
+            } else if (app.status === 'pending') {
+                app.status = 'approved';
+            }
+        },
+        text: () => {
+            const letter = (state.mailbox || []).find(l => l.id === state.flags._letterId);
+            const app = letter ? findApplication(letter.ref) : null;
+            if (!app) return "The envelope is empty."; // TODO: copy
+            const label = APPLICATION_TIERS[app.tier].label;
+            if (app.outcome === 'denied') {
+                const words = { income: 'insufficient verifiable income', collections: 'an account in collections', references: 'no references' }; // TODO: copy
+                return `An adverse-action notice from ${label}: your application was denied. Reasons: ${app.reasons.map(r => words[r] || r).join(', ')}.`; // TODO: copy
+            }
+            if (letter.missed) {
+                return `A letter from ${label}: you were approved, but the sign-by date has passed and the unit went to the next applicant.`; // TODO: copy
+            }
+            return `A letter from ${label}: you're approved. Sign by day ${letter.deadlineDay}. Move-in is $${WIN_CASH_GOAL} — first month, deposit, and fees. Bring the ID.`; // TODO: copy
+        },
+        choices: [
+            {
+                text: "Go to the leasing office to sign (30 min).", // TODO: copy
+                hidden: () => {
+                    const letter = (state.mailbox || []).find(l => l.id === state.flags._letterId);
+                    const app = letter ? findApplication(letter.ref) : null;
+                    return !(app && app.status === 'approved' && !letter.missed);
+                },
+                requires: SIGN_LEASE_REQUIRES,
+                effects: { timePassed: 0.5 },
+                nextScenario: 'lease_signing'
+            },
+            {
+                text: "Not yet.", // TODO: copy
+                hidden: () => {
+                    const letter = (state.mailbox || []).find(l => l.id === state.flags._letterId);
+                    const app = letter ? findApplication(letter.ref) : null;
+                    return !(app && app.status === 'approved' && !letter.missed);
+                },
+                nextScenario: 'hopewell_block'
+            },
+            askExtensionChoice(letterApplication),
+            {
+                text: "Fold the letter away and move on.", // TODO: copy
+                hidden: () => {
+                    const letter = (state.mailbox || []).find(l => l.id === state.flags._letterId);
+                    const app = letter ? findApplication(letter.ref) : null;
+                    return !!(app && app.status === 'approved' && !letter.missed);
+                },
+                effects: { timePassed: 0.1 },
+                nextScenario: 'hopewell_block'
+            }
+        ]
+    },
+    {
+        // The answer to the phone call, read from flags._extension
+        id: 'extension_result',
+        notRandom: true,
+        text: () => {
+            const r = state.flags._extension || { granted: false, newDay: null, tier: 'managed' };
+            if (r.tier === 'managed') {
+                return `The leasing office at ${APPLICATION_TIERS.managed.label} reads you the policy: approvals are held for the printed window and not a day past it.`; // TODO: copy
+            }
+            if (r.granted) {
+                return `The landlord on Alder thinks about it, then says fine — you have until day ${r.newDay}.`; // TODO: copy
+            }
+            return "The landlord on Alder can't hold it: someone else is ready to sign."; // TODO: copy
+        },
+        choices: [
+            { text: "Hang up and move on.", effects: { timePassed: 0.1 }, nextScenario: 'hopewell_block' } // TODO: copy
+        ]
+    },
+    {
+        // The leasing office. Signing pays the move-in, marks the lease, and
+        // hands off to loadScenario — the checkGameStatus guard there renders
+        // the victory screen, so nothing here writes one.
+        id: 'lease_signing',
+        notRandom: true,
+        text: () => {
+            const app = approvedApplication();
+            return `The leasing office at ${app ? APPLICATION_TIERS[app.tier].label : 'the building'}. The lease is on the desk, open to the signature page. $${WIN_CASH_GOAL} due now.`; // TODO: copy
+        },
+        choices: [
+            {
+                text: "Sign.", // TODO: copy
+                requires: SIGN_LEASE_REQUIRES,
+                customAction: () => {
+                    const app = approvedApplication();
+                    payWithFunds(WIN_CASH_GOAL);
+                    state.flags.signedLease = true;
+                    if (app) {
+                        app.status = 'signed';
+                        const letter = applicationLetter(app);
+                        if (letter) letter.status = 'resolved';
+                    }
+                    loadScenario();
+                }
+            },
+            { text: "Walk back out without signing.", nextScenario: null } // TODO: copy
+        ]
+    },
+    {
         // Pamela: casework with a memory. The checklist she runs — room, phone,
         // clothes, ID — is the doorway the full-time job feature opens through
         // (flags.jobSearchUnlocked); until that ships, her calls stay "in progress"
@@ -1331,6 +1559,15 @@ const scenarios = [
                 hidden: () => !(state.flags.jobSearchUnlocked && !state.flags.hasJob && state.day >= (state.flags.jobSearchDay || 0) + 2),
                 effects: { timePassed: 0.1 },
                 nextScenario: 'pamela_callback'
+            },
+            {
+                text: "Ask Pamela for a reference letter.", // TODO: copy
+                hidden: () => !(state.flags.metPamela && !state.flags.hasPamelaReference),
+                customAction: () => {
+                    state.flags.hasPamelaReference = true;
+                    applyEffects({ timePassed: 0.3 });
+                    loadScenario('pamela_checkin');
+                }
             },
             { text: "Take the advice and step back out to the corner.", effects: { timePassed: 0.1 }, nextScenario: 'hopewell_block' },
             { text: "Head off down Sycamore.", nextScenario: null }
