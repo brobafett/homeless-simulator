@@ -1,6 +1,6 @@
 // Build version, shown on the title screen (initTitleScreen). Scheme 1.0.x.y:
 // bump x for a gameplay/content feature, y for a fix or tuning pass.
-const GAME_VERSION = '1.0.25.0';
+const GAME_VERSION = '1.0.26.0';
 
 // Winning means signing a lease: first month, deposit, and the application
 // fees nobody warns you about. Referenced by checkGameStatus and the sidebar
@@ -30,6 +30,8 @@ let state = {
     // Letters addressed to the player, in send order. Plain data only — the
     // behavior for each kind lives in LETTER_KINDS (scenarios.js). See sendLetter.
     mailbox: [],
+    // Tickets the player owes on. Plain data; see issueCitation / processCitations.
+    citations: [],
     hasID: false,
     hasCleanClothes: false,
     flags: {
@@ -128,6 +130,7 @@ function continueGame() {
     if (!Array.isArray(state.recentSeen)) state.recentSeen = [];
     if (!state.lastSeenDay || typeof state.lastSeenDay !== 'object') state.lastSeenDay = {};
     if (!Array.isArray(state.mailbox)) state.mailbox = []; // saves before 1.0.25.0 have no mail queue
+    if (!Array.isArray(state.citations)) state.citations = []; // saves before 1.0.26.0 have no citations
 
     recomputeTimeModifier();     // timeModifier is derived from flags, never trusted from the save
 
@@ -246,6 +249,7 @@ function advanceDay() {
     state.seenToday = []; // a new day re-opens everything the old one used up
     if ((state.flags.motelDaysRemaining || 0) > 0) state.flags.motelDaysRemaining--;
     processMailDeadlines();
+    processCitations();
     if (state.mode === "endless") {
         state.difficultyMultiplier += 0.08; // Every day gets 8% harder
     }
@@ -259,14 +263,18 @@ function advanceDay() {
 // response window, pickup scene, what a missed deadline costs — lives in
 // LETTER_KINDS in scenarios.js. Deadlines run whether or not the letter has
 // been read: the system doesn't wait for you to check your mail.
-function sendLetter(kind) {
+// ref ties a letter to the thing it's about (a citation id); one unresolved
+// letter per kind AND ref, so two tickets get two notices.
+function sendLetter(kind, ref = null) {
     if (!Array.isArray(state.mailbox)) state.mailbox = [];
-    if (state.mailbox.some(l => l.kind === kind && l.status !== 'resolved')) return;
+    if (state.mailbox.some(l => l.kind === kind && (l.ref === undefined ? null : l.ref) === ref && l.status !== 'resolved')) return;
     const def = LETTER_KINDS[kind];
     const arriveDay = state.day + def.travelDays;
     state.mailbox.push({
-        id: `${kind}_${state.day}`,
+        // The ref suffix keeps ids unique when two notices go out the same day
+        id: `${kind}_${state.day}` + (ref === null ? '' : `_${ref}`),
         kind,
+        ref,
         address: 'hopewell',
         sentDay: state.day,
         arriveDay,
@@ -284,7 +292,7 @@ function processMailDeadlines() {
         if (state.day > letter.deadlineDay) {
             letter.missed = true;
             const def = LETTER_KINDS[letter.kind];
-            if (def && def.onMissed) def.onMissed();
+            if (def && def.onMissed) def.onMissed(letter);
         }
     }
 }
@@ -307,6 +315,84 @@ function findLetter(kind) {
         if (state.mailbox[i].kind === kind) return state.mailbox[i];
     }
     return null;
+}
+
+// Citations: civil/infraction tickets with the due date printed on them. Miss it
+// and a late penalty lands plus a delinquency notice (mailed only if there's an
+// address to mail it to); miss the second date and it goes to collections.
+// amount is what's really owed; knownAmount is what the player last saw.
+const CITATION_DUE_DAYS = 10;
+const CITATION_LATE_PENALTY = 100;
+const CITATION_COLLECTIONS_DAYS = 14;   // after going delinquent
+const CITATION_COLLECTIONS_RATE = 0.20; // added on referral
+
+function roundCents(x) { return Math.round(x * 100) / 100; }
+
+function issueCitation(source, label, amount) {
+    if (!Array.isArray(state.citations)) state.citations = [];
+    let id = `${source}_${state.day}`;
+    // Same source twice in one day would collide — payCitation looks up by id
+    for (let n = 2; state.citations.some(c => c.id === id); n++) id = `${source}_${state.day}_${n}`;
+    const c = {
+        id, source, label,
+        baseAmount: amount, amount, knownAmount: amount,
+        issuedDay: state.day, dueDay: state.day + CITATION_DUE_DAYS, collectionsDay: null,
+        status: 'open', reducedOnce: false
+    };
+    state.citations.push(c);
+    return c;
+}
+
+// Called from advanceDay(), right after processMailDeadlines(). One step per
+// citation per day: open -> delinquent -> collections, each exactly once.
+function processCitations() {
+    if (!Array.isArray(state.citations)) return;
+    for (const c of state.citations) {
+        if (c.status === 'open' && state.day > c.dueDay) {
+            c.status = 'delinquent';
+            c.amount = roundCents(c.amount + CITATION_LATE_PENALTY);
+            c.collectionsDay = state.day + CITATION_COLLECTIONS_DAYS;
+            if (state.flags.hasMailingAddress) sendLetter('citation_delinquent', c.id);
+        } else if (c.status === 'delinquent' && state.day > c.collectionsDay) {
+            c.status = 'collections';
+            c.amount = roundCents(c.amount * (1 + CITATION_COLLECTIONS_RATE));
+            state.flags.hasCollections = true;
+        }
+    }
+}
+
+function findCitation(id) {
+    return (state.citations || []).find(c => c.id === id) || null;
+}
+
+// Unpaid citations, oldest first
+function unpaidCitations() {
+    return (state.citations || []).filter(c => c.status !== 'paid')
+        .sort((a, b) => a.issuedDay - b.issuedDay);
+}
+
+// The citation a picked-up letter is about (flags._letterId, set at the mail bin)
+function letterCitation() {
+    const letter = (state.mailbox || []).find(l => l.id === state.flags._letterId);
+    return letter ? findCitation(letter.ref) : null;
+}
+
+// What the ticket itself said: the face amount, or half of it after a granted
+// reduction (only possible while open, so this is the pre-penalty amount)
+function citationTicketAmount(c) {
+    return c.reducedOnce ? roundCents(c.baseAmount / 2) : c.baseAmount;
+}
+
+function payCitation(id) {
+    const c = findCitation(id);
+    if (!c || c.status === 'paid') return;
+    payWithFunds(c.amount);
+    c.status = 'paid';
+    c.knownAmount = 0;
+    for (const l of (state.mailbox || [])) {
+        if (l.ref === id) l.status = 'resolved';
+    }
+    state.flags.hasCollections = state.citations.some(x => x.status === 'collections');
 }
 
 // Seasons: derived entirely from state.day — no new save fields, so old saves
@@ -1120,6 +1206,21 @@ function renderGear() {
     // the player has opened the letter that tells them
     if (state.flags.waitlistDropped && !(waitlistLetter && waitlistLetter.status === 'in_transit')) {
         items.push('Housing waitlist (dropped)');
+    }
+
+    // Citations show what the player last saw (knownAmount), never the live amount
+    for (const c of unpaidCitations()) {
+        const known = c.knownAmount || 0;
+        if (c.status === 'open') {
+            items.push(`${c.label}: $${known.toFixed(2)} due day ${c.dueDay}`);
+        } else if (known === citationTicketAmount(c)) {
+            items.push(`${c.label} — past due since day ${c.dueDay}`);
+        } else {
+            // "In collections" only once someone has said so (the clerk sets
+            // knownAmount to the live amount); a notice read earlier doesn't
+            const inCollections = c.status === 'collections' && known === c.amount;
+            items.push(`${c.label}: $${known.toFixed(2)} owed${inCollections ? ' — in collections' : ''}`);
+        }
     }
 
     list.innerHTML = items.map(i => `<li>${i}</li>`).join('');

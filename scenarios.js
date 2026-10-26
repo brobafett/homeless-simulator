@@ -56,14 +56,57 @@ const LABOR_TICKETS = [
 // Letter kinds for the mail queue (sendLetter / processMailDeadlines in game.js).
 // travelDays: days from send to the bin. respondDays: days after arrival to
 // answer (null = no deadline). onMissed runs once, the morning after the
-// deadline, whether or not the letter was ever read.
+// deadline, whether or not the letter was ever read, and receives the letter.
+// ref (optional) ties a letter to what it's about — a citation id.
 const LETTER_KINDS = {
     waitlist_confirm: {
         travelDays: 6, respondDays: 3,
         pickupScenario: 'letter_waitlist',
         onMissed: () => { state.flags.waitlistDropped = true; }
+    },
+    // The deadline lives on the citation (collectionsDay), not the letter
+    citation_delinquent: {
+        travelDays: 3, respondDays: null,
+        pickupScenario: 'letter_citation'
     }
 };
+
+// Travel to the clerk's window — shared by idle_time and hopewell_block.
+// Only on offer while something is owed; the window keeps eight-to-four hours.
+const COURTHOUSE_WALK = {
+    text: "Walk to the courthouse clerk's window (40 min).",
+    hidden: () => unpaidCitations().length === 0,
+    requires: { check: () => state.timeHour >= 8 && state.timeHour <= 16, checkLabel: '(Clerk window closed)' },
+    effects: { timePassed: 0.67 },
+    nextScenario: 'courthouse_window'
+};
+
+// The clerk's window lists at most this many tickets as choices (oldest first).
+// Fixed slots keep the choices static data; each slot hides when it's empty.
+const COURTHOUSE_SLOTS = 3;
+function courthouseSlotChoices(i) {
+    const slot = () => unpaidCitations().slice(0, COURTHOUSE_SLOTS)[i];
+    return [
+        {
+            text: () => `Pay the ${slot().label} ($${slot().amount.toFixed(2)}).`,
+            hidden: () => !slot(),
+            requires: { funds: () => slot().amount },
+            customAction: () => { payCitation(slot().id); loadScenario('courthouse_window'); }
+        },
+        {
+            text: () => `Ask about an ability-to-pay reduction on the ${slot().label}.`,
+            hidden: () => !(slot() && slot().status === 'open' && !slot().reducedOnce),
+            effects: { timePassed: 1.5 },
+            customAction: () => {
+                const c = slot();
+                c.amount = roundCents(c.amount / 2);
+                c.knownAmount = roundCents(c.knownAmount / 2);
+                c.reducedOnce = true;
+                loadScenario('courthouse_window');
+            }
+        }
+    ];
+}
 
 // The corner-store shelf — shared between the walk-in scene and the browse loop
 // so buying one thing doesn't bounce you out the door mid-errand
@@ -253,7 +296,8 @@ const scenarios = [
                 hidden: () => !(state.mode === 'goal' && state.hasID && state.timeHour >= 9 && state.timeHour <= 16.5),
                 effects: { timePassed: 0.35 },
                 nextScenario: 'bank_branch'
-            }
+            },
+            COURTHOUSE_WALK
         ]
     },
     {
@@ -503,6 +547,7 @@ const scenarios = [
         id: 'subway_caught',
         notRandom: true,
         text: "A transit officer grabs your shoulder as soon as your feet hit the platform. They write you a $50 ticket you can't pay and kick you out into the cold.",
+        onLoad: () => { issueCitation('fare', 'Fare evasion citation', 50); },
         effects: { mentalFortitude: -30, timePassed: 0.5 },
         choices: [ { text: "Walk away in shame.", nextScenario: null } ]
     },
@@ -664,9 +709,27 @@ const scenarios = [
         text: "You find a relatively safe, dry spot in a public park to rest your eyes. Just as you drift off, a flashlight shines in your face. 'You can't sleep here. Move along.'",
         effects: { timePassed: 1 },
         choices: [
-            { text: "Comply immediately.", effects: { mentalFortitude: -10 }, nextScenario: null },
+            {
+                text: "Comply immediately.",
+                effects: { mentalFortitude: -10 },
+                // Sometimes moving along isn't the end of it: a ticket for the bench
+                customAction: () => {
+                    if (Math.random() < 0.4) {
+                        issueCitation('lodging', 'Citation: sleeping in public', 75);
+                        loadScenario('police_citation');
+                    } else {
+                        loadScenario();
+                    }
+                }
+            },
             { text: "Argue that it's public property.", requires: { mentalFortitude: 60 }, nextScenario: 'police_argue' }
         ]
+    },
+    {
+        id: 'police_citation',
+        notRandom: true,
+        text: "Before you've finished packing up, the officer writes you a $75 citation for sleeping in public. The due date is printed at the bottom.", // TODO: copy
+        choices: [ { text: "Fold the ticket into your pocket and move along.", nextScenario: null } ] // TODO: copy
     },
     {
         id: 'police_argue',
@@ -1014,6 +1077,7 @@ const scenarios = [
                         const letter = arrivedUnreadAt('hopewell');
                         if (letter) {
                             letter.status = 'read';
+                            state.flags._letterId = letter.id; // pickup scenes read the letter they were handed
                             loadScenario(LETTER_KINDS[letter.kind].pickupScenario);
                         } else {
                             loadScenario('hopewell_no_mail');
@@ -1057,6 +1121,7 @@ const scenarios = [
                 effects: { timePassed: 0.35 },
                 nextScenario: 'bank_branch'
             },
+            COURTHOUSE_WALK,
             { text: "Sit a while in the periodicals section, out of the weather.", effects: { warmth: 12, mentalFortitude: 5, timePassed: 1 }, nextScenario: 'hopewell_block' },
             { text: "Eat something from your bag at a corner table, head down.", requires: { stash: 1 }, effects: { foodStash: -1, hunger: 35, mentalFortitude: 5, timePassed: 0.3 }, nextScenario: 'hopewell_block' },
             { text: "Head back out.", nextScenario: null }
@@ -1154,6 +1219,53 @@ const scenarios = [
                 effects: { mentalFortitude: -10, timePassed: 0.1 },
                 nextScenario: 'hopewell_block'
             }
+        ]
+    },
+    {
+        // A delinquency notice (LETTER_KINDS.citation_delinquent), handed over at
+        // the mail bin via flags._letterId. The letter was printed the day the
+        // ticket went past due, so it states that amount — not whatever the
+        // ticket has grown to since.
+        id: 'letter_citation',
+        notRandom: true,
+        onLoad: () => {
+            const c = letterCitation();
+            if (c && c.status !== 'paid') c.knownAmount = roundCents(citationTicketAmount(c) + CITATION_LATE_PENALTY);
+        },
+        text: () => {
+            const c = letterCitation();
+            if (!c) return "The envelope is empty."; // TODO: copy
+            if (c.status === 'paid') return `A late notice for your ${c.label.toLowerCase()} — already paid.`; // TODO: copy
+            let t = `A late notice for your ${c.label.toLowerCase()}: you now owe $${c.knownAmount.toFixed(2)}. Pay by day ${c.collectionsDay} or it goes to collections.`; // TODO: copy
+            if (c.status === 'collections') t += " That day has already passed."; // TODO: copy
+            return t;
+        },
+        choices: [
+            { text: "Fold the notice away and move on.", effects: { timePassed: 0.1 }, nextScenario: 'hopewell_block' } // TODO: copy
+        ]
+    },
+    {
+        // The clerk's window: the one place the real numbers are said out loud.
+        // Visiting updates what the player knows about every unpaid ticket.
+        id: 'courthouse_window',
+        notRandom: true,
+        onLoad: () => { for (const c of unpaidCitations()) c.knownAmount = c.amount; },
+        text: () => {
+            const owed = unpaidCitations();
+            if (owed.length === 0) return "The clerk checks your name. 'Nothing outstanding.'"; // TODO: copy
+            const lines = owed.map(c => {
+                const status = c.status === 'collections' ? ' — in collections'
+                    : c.status === 'delinquent' ? ` — past due, collections after day ${c.collectionsDay}`
+                    : ` — due day ${c.dueDay}`;
+                return `${c.label}: $${c.amount.toFixed(2)}${status}`;
+            });
+            return "The clerk reads your balance off the screen. " + lines.join('; ') + "."; // TODO: copy
+        },
+        choices: [
+            ...courthouseSlotChoices(0),
+            ...courthouseSlotChoices(1),
+            ...courthouseSlotChoices(2),
+            { text: "Leave.", nextScenario: null }
         ]
     },
     {

@@ -1149,5 +1149,177 @@ loadScenario('hopewell_no_mail');
 assert(!els['narrative-text'].innerHTML.includes('DMV'), 'empty bin with ID and birth certificate does not mention the DMV');
 state.mailbox = [];
 
+// --- Citations: a ticket, a late notice, then collections ---
+function citeSetup(hasAddress) {
+    state.mode = 'goal'; state.timeModifier = 1.0; state.day = 5; // autumn
+    state.flags = hasAddress ? { hasMailingAddress: true } : {};
+    state.hasID = true; state.hasCleanClothes = false;
+    state.mailbox = []; state.citations = [];
+    topUp(); state.cash = 0;
+}
+function citeLetters() { return state.mailbox.filter(l => l.kind === 'citation_delinquent'); }
+function gearHtml() { renderGear(); return els['gear-list'].innerHTML; }
+
+// Issue and pay on time: no penalty, no letter
+citeSetup(true);
+loadScenario('subway_caught');
+const fare = state.citations[0];
+assert(state.citations.length === 1 && fare.id === 'fare_5' && fare.amount === 50 && fare.knownAmount === 50 && fare.dueDay === 15 && fare.status === 'open', 'subway_caught issues a $50 fare citation due in 10 days');
+assert(els['narrative-text'].innerHTML.includes('$50 ticket'), 'subway_caught keeps its text');
+assert(gearHtml().includes('Fare evasion citation: $50.00 due day 15'), 'gear shows an open citation and its due day');
+state.cash = 60; state.day = 10; state.timeHour = 10;
+loadScenario('courthouse_window');
+clickChoice('Pay the Fare evasion citation ($50.00)');
+assert(fare.status === 'paid' && fare.knownAmount === 0 && Math.abs(state.cash - 10) < 0.01, 'paying at the window clears it');
+for (let i = 0; i < 30; i++) advanceDay();
+assert(fare.amount === 50 && citeLetters().length === 0, 'a paid citation takes no penalty and sends no letter');
+assert(!gearHtml().includes('Fare evasion'), 'a paid citation leaves the gear list');
+
+// Miss the due date with an address: penalty plus one notice
+citeSetup(true);
+issueCitation('fare', 'Fare evasion citation', 50);
+const late = state.citations[0];
+state.day = 14; advanceDay(); // day 15 is the due day — still on time
+assert(late.status === 'open', 'not delinquent on the due day');
+advanceDay(); // day 16
+assert(late.status === 'delinquent' && late.amount === 150 && late.collectionsDay === 30, 'past due: delinquent, +$100, collections after day 30');
+assert(citeLetters().length === 1 && citeLetters()[0].ref === late.id && citeLetters()[0].arriveDay === 19, 'one notice mailed with the citation as its ref');
+assert(gearHtml().includes('Fare evasion citation — past due since day 15') && !gearHtml().includes('150'), 'gear shows knownAmount, not the live amount, before the notice is read');
+
+// Read the notice at the bin
+state.day = 19; topUp();
+loadScenario('hopewell_block');
+clickChoice('mail bin');
+assert(els['narrative-text'].innerHTML.includes('$150.00') && els['narrative-text'].innerHTML.includes('day 30'), 'the notice states the new amount and the collections day');
+assert(late.knownAmount === 150, 'reading the notice updates knownAmount');
+assert(gearHtml().includes('Fare evasion citation: $150.00 owed') && !gearHtml().includes('in collections'), 'gear shows the noticed amount');
+clickChoice('move on');
+
+// Miss the collections date
+state.day = 29; advanceDay(); // day 30
+assert(late.status === 'delinquent', 'not in collections on the collections day');
+advanceDay(); // day 31
+assert(late.status === 'collections' && late.amount === 180 && state.flags.hasCollections === true, 'past the second date: collections at x1.20, hasCollections set');
+assert(!gearHtml().includes('in collections'), 'gear does not reveal collections the player has not been told about');
+for (let i = 0; i < 20; i++) advanceDay();
+assert(late.amount === 180 && citeLetters().length === 1, 'each transition fires exactly once across repeated days');
+
+// Collections rounds to cents
+citeSetup(false);
+const odd = issueCitation('lodging', 'Citation: sleeping in public', 75);
+odd.reducedOnce = true; odd.amount = 37.5; odd.knownAmount = 37.5;
+state.day = 40; advanceDay(); // delinquent: 137.50
+state.day = odd.collectionsDay; advanceDay();
+assert(odd.status === 'collections' && odd.amount === 165, 'collections amount (137.50 x 1.2 = ' + odd.amount + ')');
+const odd2 = issueCitation('fare', 'Fare evasion citation', 33.33);
+state.day = odd2.dueDay; advanceDay();
+state.day = odd2.collectionsDay; advanceDay();
+assert(odd2.amount === 160, 'collections rounds to cents (133.33 x 1.2 = ' + odd2.amount + ')');
+
+// No address: delinquent, but nothing is mailed
+citeSetup(false);
+issueCitation('fare', 'Fare evasion citation', 50);
+state.day = 16; advanceDay();
+assert(state.citations[0].status === 'delinquent' && state.citations[0].amount === 150 && state.mailbox.length === 0, 'no mailing address: delinquent with no letter');
+
+// hasCollections clears only when nothing is left in collections
+citeSetup(false);
+const a = issueCitation('fare', 'Fare evasion citation', 50);
+state.day = 6;
+const b = issueCitation('lodging', 'Citation: sleeping in public', 75);
+for (let i = 0; i < 30; i++) advanceDay();
+assert(a.status === 'collections' && b.status === 'collections' && state.flags.hasCollections, 'both citations in collections');
+state.cash = 1000; state.timeHour = 10;
+loadScenario('courthouse_window');
+assert(els['narrative-text'].innerHTML.includes('$' + a.amount.toFixed(2)) && a.knownAmount === a.amount && b.knownAmount === b.amount, 'the window states real amounts and updates knownAmount');
+assert(gearHtml().includes('in collections'), 'after the clerk says so, gear shows collections');
+payCitation(a.id);
+assert(state.flags.hasCollections === true, 'paying one leaves hasCollections while another is in collections');
+payCitation(b.id);
+assert(state.flags.hasCollections === false, 'paying the last clears hasCollections');
+
+// The reduction: only while open, only once, halves to cents
+citeSetup(false);
+const r = issueCitation('fare', 'Fare evasion citation', 50.25);
+state.cash = 0; state.timeHour = 10;
+loadScenario('courthouse_window');
+const payBtn = els['choices-list'].children.find(b => b.textContent.includes('Pay the Fare'));
+assert(payBtn && payBtn.disabled, 'paying needs the funds');
+clickChoice('ability-to-pay reduction');
+assert(r.amount === 25.13 && r.knownAmount === 25.13 && r.reducedOnce, 'reduction halves to cents ($' + r.amount + ')');
+assert(state.timeHour === 11.5, 'the reduction costs 1.5 hours of waiting');
+assert(!els['choices-list'].children.some(b => b.textContent.includes('reduction')), 'a reduction is granted once');
+state.day = r.dueDay + 1; advanceDay();
+loadScenario('courthouse_window');
+assert(!els['choices-list'].children.some(b => b.textContent.includes('reduction')), 'no reduction once delinquent');
+assert(gearHtml().includes('$125.13 owed'), 'reduced, then late: penalty lands on the reduced amount');
+
+// Two citations get two letters
+citeSetup(true);
+issueCitation('fare', 'Fare evasion citation', 50);
+issueCitation('lodging', 'Citation: sleeping in public', 75);
+issueCitation('fare', 'Fare evasion citation', 50);
+assert(state.citations[2].id === 'fare_5_2', 'same source, same day gets a unique id');
+state.day = 16; advanceDay();
+const two = citeLetters();
+assert(two.length === 3 && new Set(two.map(l => l.ref)).size === 3 && new Set(two.map(l => l.id)).size === 3, 'each citation gets its own notice with a unique id');
+sendLetter('citation_delinquent', state.citations[0].id);
+assert(citeLetters().length === 3, 'a duplicate notice for the same citation is ignored');
+
+// The window lists at most three tickets as choices
+issueCitation('lodging', 'Citation: sleeping in public', 75);
+state.timeHour = 10;
+loadScenario('courthouse_window');
+assert(els['choices-list'].children.filter(b => b.textContent.includes('Pay the')).length === 3, 'more than three unpaid: only the three oldest are payable choices');
+
+// Travel: hidden with nothing owed, disabled after hours
+citeSetup(false); state.timeHour = 10;
+loadScenario('idle_time');
+assert(!els['choices-list'].children.some(b => b.textContent.includes('courthouse')), 'no courthouse walk with nothing owed');
+issueCitation('fare', 'Fare evasion citation', 50);
+loadScenario('idle_time');
+clickChoice('courthouse');
+assert(els['narrative-text'].innerHTML.includes('Fare evasion citation: $50.00'), 'idle_time walks to the clerk window');
+state.timeHour = 17;
+loadScenario('hopewell_block');
+const shut = els['choices-list'].children.find(b => b.textContent.includes('courthouse'));
+assert(shut && shut.disabled && shut.textContent.includes('Clerk window closed'), 'the window renders closed after hours');
+
+// police_move_on: 40% writes a ticket, otherwise unchanged
+citeSetup(false); state.timeHour = 22; state.mental = 80;
+loadScenario('police_move_on');
+Math.random = () => 0.1;
+clickChoice('Comply immediately');
+Math.random = origRandom;
+assert(state.citations.length === 1 && state.citations[0].source === 'lodging' && state.citations[0].amount === 75, 'complying can bring a $75 lodging citation');
+assert(els['narrative-text'].innerHTML.includes('$75 citation') && Math.abs(state.mental - 70) < 0.5, 'police_citation shown, mental cost kept');
+citeSetup(false); state.timeHour = 22; state.mental = 80;
+loadScenario('police_move_on');
+// The no-ticket branch falls through to a random draw, whose own entry effects
+// move mental — so check the choice's cost before the draw happens
+const comply = scenarios.find(s => s.id === 'police_move_on').choices.find(c => c.text === 'Comply immediately.');
+assert(comply.effects.mentalFortitude === -10, 'both branches share the choice-level mental cost');
+Math.random = () => 0.9;
+clickChoice('Comply immediately');
+Math.random = origRandom;
+assert(state.citations.length === 0 && !els['narrative-text'].innerHTML.includes('$75 citation'), 'no ticket on the other 60%: back to the random draw');
+
+// Saves
+citeSetup(true);
+issueCitation('fare', 'Fare evasion citation', 50);
+saveGame();
+state.citations = [];
+continueGame();
+assert(state.citations.length === 1 && state.citations[0].dueDay === 15 && state.citations[0].status === 'open', 'citations survive a JSON round trip');
+const preCite = JSON.parse(localStorage.getItem('the-streets-save'));
+delete preCite.citations;
+localStorage.setItem('the-streets-save', JSON.stringify(preCite));
+state.citations = undefined;
+continueGame();
+assert(Array.isArray(state.citations) && state.citations.length === 0, 'an old save with no citations loads');
+advanceDay();
+assert(true, 'advanceDay runs on a normalized old save');
+state.citations = []; state.mailbox = [];
+
 console.log(failures === 0 ? '\nALL TESTS PASSED' : '\n' + failures + ' FAILURES');
 process.exit(failures === 0 ? 0 : 1);
