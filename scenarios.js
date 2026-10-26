@@ -1611,9 +1611,12 @@ const scenarios = [
             {
                 text: "Take it. Six a.m.",
                 effects: { mentalFortitude: 20, timePassed: 0.5, flags: { hasJob: true, missedShifts: 0 } },
-                // nextPayday depends on state.day at hire time — can't sit in a static effects object
+                // hireDay and nextPayday depend on state.day at hire time — can't sit in
+                // a static effects object. The first payday is pulled onto a work day
+                // so the check actually gets handed over on a worked shift.
                 customAction: () => {
-                    state.flags.nextPayday = state.day + PAY_PERIOD_DAYS;
+                    state.flags.hireDay = state.day;
+                    state.flags.nextPayday = firstWorkDayOnOrAfter(state.day + PAY_PERIOD_DAYS);
                     state.flags.pendingWages = 0;
                     loadScenario('warehouse_hired');
                 }
@@ -1727,6 +1730,14 @@ const scenarios = [
                 nextScenario: 'bank_branch'
             },
             { text: "Stop by the convenience store on the walk back.", effects: { timePassed: 0.2 }, nextScenario: 'convenience_store' },
+            {
+                // The paperwork corner after a shift: same hours and label as the
+                // idle_time walk, so the employed player isn't cut off from Sycamore
+                text: "Walk to Sycamore — the library and Hopewell (30 min).", // TODO: copy
+                requires: { check: () => state.timeHour >= 7.5 && state.timeHour < 19, checkLabel: '(Closed until 8 AM)' },
+                effects: { timePassed: 0.5 },
+                nextScenario: 'hopewell_block'
+            },
             { text: "Head out into the evening.", nextScenario: null }
         ]
     },

@@ -1653,5 +1653,99 @@ Math.random = origRandom;
 assert(loaded.extensionAsked === true && !canAskExtension(), 'the ask is recorded on the old application');
 state.applications = []; state.mailbox = [];
 
+
+// --- The dock schedule: five on, two off, paydays on work days ---
+function morningForces() {
+    // What an employed 8 AM forces, if anything: 'shift', 'labor', or null
+    topUp(); state.timeHour = 8;
+    state.flags.lastWorkDay = 0; state.flags.lastLaborDay = 0;
+    loadScenario();
+    if (state.flags.lastWorkDay === state.day) return 'shift';
+    if (state.flags.lastLaborDay === state.day) return 'labor';
+    return null;
+}
+function workToday() {
+    topUp(); state.timeHour = 8; state.flags.lastWorkDay = 0;
+    loadScenario('warehouse_shift');
+    clickChoice('work through lunch');
+}
+
+// Hire on day D through the interview
+state.mode = 'goal'; state.timeModifier = 1.0; state.day = 20;
+state.flags = { metPamela: true, hasMailingAddress: true, motelDaysRemaining: 6, hasPhone: true, phoneExpiryDay: 60, jobSearchUnlocked: true, jobSearchDay: 10 };
+state.hasID = true; state.hasCleanClothes = true;
+state.mailbox = []; state.citations = []; state.applications = [];
+topUp(); state.cash = 100; state.foodStash = 0;
+loadScenario('warehouse_interview');
+clickChoice('Take it');
+const D = 20;
+assert(state.flags.hireDay === D, 'hire day stamped');
+assert(!isWorkDay(), 'the hire day itself is not a work day');
+assert(state.flags.nextPayday === D + 8, 'first payday is the first work day on or after hire + 7 (day ' + state.flags.nextPayday + ')');
+assert(isWorkDayOn(state.flags.nextPayday), 'first payday lands on a work day');
+
+// D+1..D+5 force the shift; D+6 and D+7 are off; D+8 forces again
+const forced = {};
+for (let d = D + 1; d <= D + 8; d++) {
+    state.day = d;
+    forced[d] = morningForces();
+}
+assert([1, 2, 3, 4, 5].every(k => forced[D + k] === 'shift'), 'days D+1..D+5 force the warehouse gate');
+assert(forced[D + 6] === null && forced[D + 7] === null, 'days D+6 and D+7 force nothing in the morning — no gate, no ticket board');
+assert(forced[D + 8] === 'shift', 'day D+8 forces the gate again');
+
+// Gear: works today / day off / next day off
+state.day = D + 3; renderGear();
+assert(els['gear-list'].innerHTML.includes('Dock: works today — next day off: day ' + (D + 6)), 'gear shows a work day and the next day off');
+assert(els['gear-list'].innerHTML.includes('Paycheck:'), 'the paycheck line is kept');
+state.day = D + 6; renderGear();
+assert(els['gear-list'].innerHTML.includes('Dock: day off today') && !els['gear-list'].innerHTML.includes('next day off'), 'gear shows a day off');
+
+// Work the first week: the first payday pays out on the shift it lands on
+state.flags.pendingWages = 0; state.flags.payStubs = 0; state.flags.hasBankAccount = true; state.flags.bankBalance = 0;
+for (let d = D + 1; d <= D + 5; d++) { state.day = d; workToday(); }
+assert(state.flags.pendingWages === 5 * 128 && !state.flags._paycheck, 'five shifts accrued, nothing paid yet');
+state.day = D + 8; workToday();
+assert(state.flags._paycheck && state.flags._paycheck.amount === 640 && state.flags.payStubs === 1, 'the first payday pays out the first week on the day-8 shift');
+assert(state.flags.nextPayday === D + 15 && isWorkDayOn(state.flags.nextPayday), 'the next payday is a work day too');
+
+// Several cycles: every payday is a work day and pays out on that shift
+let paydaysSeen = 0;
+for (let d = D + 9; d <= D + 36; d++) {
+    state.day = d;
+    if (!isWorkDay()) continue;
+    const expectPay = d === state.flags.nextPayday;
+    workToday();
+    if (expectPay) {
+        paydaysSeen++;
+        if (!state.flags._paycheck) { assert(false, 'payday on day ' + d + ' did not pay'); break; }
+        if (!isWorkDayOn(state.flags.nextPayday)) { assert(false, 'next payday ' + state.flags.nextPayday + ' is a day off'); break; }
+    }
+}
+assert(paydaysSeen === 4 && state.flags.payStubs === 5, 'four more paydays across four cycles, each on a work day (' + paydaysSeen + ' seen, ' + state.flags.payStubs + ' stubs)');
+
+// A legacy employed save: no hireDay, works today, nothing throws
+state.day = 50; state.flags = { hasJob: true, nextPayday: 53, pendingWages: 0 }; state.timeHour = 8;
+let legacyThrew = false;
+try { renderGear(); } catch (e) { legacyThrew = true; }
+assert(!legacyThrew, 'renderGear does not throw on an employed save without hireDay');
+assert(morningForces() === 'shift' && state.flags.hireDay === 49, 'a legacy save works today and gets a hire day that makes today the first of a cycle');
+saveGame();
+delete state.flags.hireDay;
+continueGame();
+assert(state.flags.hireDay === 49, 'continueGame normalizes the missing hire day');
+
+// shift_done offers the walk to Sycamore, closed after 19:00
+state.flags = { hasJob: true, hireDay: 49, nextPayday: 57, pendingWages: 0, hasMailingAddress: true }; state.mode = 'goal';
+topUp(); state.timeHour = 15;
+loadScenario('shift_done');
+clickChoice('Walk to Sycamore');
+assert(els['narrative-text'].innerHTML.includes('Sycamore and 4th'), 'the walk from the dock lands on the Hopewell block');
+state.timeHour = 20;
+loadScenario('shift_done');
+const lateWalkHome = els['choices-list'].children.find(b => b.textContent.includes('Walk to Sycamore'));
+assert(lateWalkHome && lateWalkHome.disabled && lateWalkHome.textContent.includes('Closed until 8 AM'), 'after 19:00 the walk renders closed, not hidden');
+state.flags = {}; state.mailbox = []; state.citations = []; state.applications = [];
+
 console.log(failures === 0 ? '\nALL TESTS PASSED' : '\n' + failures + ' FAILURES');
 process.exit(failures === 0 ? 0 : 1);

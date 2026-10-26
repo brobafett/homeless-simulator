@@ -1,6 +1,6 @@
 // Build version, shown on the title screen (initTitleScreen). Scheme 1.0.x.y:
 // bump x for a gameplay/content feature, y for a fix or tuning pass.
-const GAME_VERSION = '1.0.28.0';
+const GAME_VERSION = '1.0.29.0';
 
 // Signing a lease costs this much up front: first month, deposit, and the
 // application fees nobody warns you about. Paid in lease_signing; shown in the
@@ -135,6 +135,8 @@ function continueGame() {
     if (!Array.isArray(state.mailbox)) state.mailbox = []; // saves before 1.0.25.0 have no mail queue
     if (!Array.isArray(state.citations)) state.citations = []; // saves before 1.0.26.0 have no citations
     if (!Array.isArray(state.applications)) state.applications = []; // saves before 1.0.27.0 have no applications
+    // Saves before 1.0.29.0 have a job but no schedule: today becomes the first work day of a cycle
+    if (state.flags.hasJob && state.flags.hireDay === undefined) state.flags.hireDay = state.day - 1;
 
     recomputeTimeModifier();     // timeModifier is derived from flags, never trusted from the save
 
@@ -752,6 +754,43 @@ function payWithFunds(amount) {
     return fromCard;
 }
 
+// The dock schedule: five work days after the hire day, then two off, on a
+// seven-day cycle. The hire day itself is off (the interview happens after
+// the morning shift window). PAY_PERIOD_DAYS is also seven, so a payday set
+// on a work day stays on a work day for the life of the job — workShift only
+// pays out on a worked shift, so this alignment matters.
+const WORK_CYCLE_DAYS = 7;
+const WORK_DAYS_PER_CYCLE = 5;
+
+// Legacy saves (employed, no hireDay) treat today as the first work day
+function hireDayOrLegacy() {
+    if (state.flags.hireDay === undefined) state.flags.hireDay = state.day - 1;
+    return state.flags.hireDay;
+}
+
+function isWorkDayOn(day) {
+    if (!state.flags.hasJob) return false;
+    const offset = (((day - hireDayOrLegacy() - 1) % WORK_CYCLE_DAYS) + WORK_CYCLE_DAYS) % WORK_CYCLE_DAYS;
+    return offset < WORK_DAYS_PER_CYCLE;
+}
+
+function isWorkDay() {
+    return isWorkDayOn(state.day);
+}
+
+// The first day off strictly after today (only meaningful on a work day)
+function nextDayOff() {
+    let d = state.day + 1;
+    while (isWorkDayOn(d)) d++;
+    return d;
+}
+
+function firstWorkDayOnOrAfter(day) {
+    let d = day;
+    while (!isWorkDayOn(d)) d++;
+    return d;
+}
+
 // W-2 pay is weekly, not per-shift: a shift's gross accrues to pendingWages, and
 // only a payday actually moves money. On payday, everything accrued BEFORE
 // today's shift pays out first (pay runs a period in arrears), then today's
@@ -1109,8 +1148,9 @@ function loadScenario(id) {
     }
 
     // A job changes what morning means: the warehouse gate replaces the ticket
-    // board, same window, same once-per-day stamp
-    if (!id && state.flags.hasJob && state.timeHour >= 6 && state.timeHour <= 10 && state.flags.lastWorkDay !== state.day) {
+    // board, same window, same once-per-day stamp. Days off force nothing —
+    // not the gate, not the ticket board — so the morning plays from the pool.
+    if (!id && state.flags.hasJob && isWorkDay() && state.timeHour >= 6 && state.timeHour <= 10 && state.flags.lastWorkDay !== state.day) {
         id = 'warehouse_shift';
     }
 
@@ -1316,6 +1356,7 @@ function renderGear() {
     if (state.flags.hasBankAccount) items.push(`ATM card — checking $${(state.flags.bankBalance || 0).toFixed(2)}`);
 
     if (state.flags.hasJob) {
+        items.push(isWorkDay() ? `Dock: works today — next day off: day ${nextDayOff()}` : 'Dock: day off today');
         const payday = state.flags.nextPayday !== undefined ? state.flags.nextPayday : state.day + PAY_PERIOD_DAYS;
         items.push(`Paycheck: $${(state.flags.pendingWages || 0).toFixed(2)} accrued — payday day ${payday}`);
     }
