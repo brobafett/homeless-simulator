@@ -1,6 +1,6 @@
 // Build version, shown on the title screen (initTitleScreen). Scheme 1.0.x.y:
 // bump x for a gameplay/content feature, y for a fix or tuning pass.
-const GAME_VERSION = '1.0.29.0';
+const GAME_VERSION = '1.0.30.0';
 
 // Signing a lease costs this much up front: first month, deposit, and the
 // application fees nobody warns you about. Paid in lease_signing; shown in the
@@ -254,8 +254,36 @@ function advanceDay() {
     if ((state.flags.motelDaysRemaining || 0) > 0) state.flags.motelDaysRemaining--;
     processMailDeadlines();
     processCitations();
+    processDogUpkeep();
     if (state.mode === "endless") {
         state.difficultyMultiplier += 0.08; // Every day gets 8% harder
+    }
+}
+
+// The dog: a stray that stays once it has eaten from your hand twice. Flags:
+// hasDog, dogTrust (feedings before adoption), dogFoodDays (mornings it's fed
+// for), dogHungryDays (hungry mornings in a row), dogLeft (gone for good),
+// _dogLeftPending (transient: forces dog_left on the next load). Each fed
+// morning spends a food day; each hungry one costs mental, and after
+// DOG_LEAVES_AFTER in a row the dog goes looking for someone who can feed it.
+// Set by design — don't tune.
+const DOG_HUNGRY_MENTAL = 6;
+const DOG_LEAVES_AFTER = 3;
+
+// Called from advanceDay(): the dog eats or doesn't, and leaves exactly once
+function processDogUpkeep() {
+    if (!state.flags.hasDog) return;
+    if ((state.flags.dogFoodDays || 0) > 0) {
+        state.flags.dogFoodDays--;
+        state.flags.dogHungryDays = 0;
+        return;
+    }
+    state.flags.dogHungryDays = (state.flags.dogHungryDays || 0) + 1;
+    state.mental = Math.max(0, state.mental - DOG_HUNGRY_MENTAL);
+    if (state.flags.dogHungryDays >= DOG_LEAVES_AFTER) {
+        state.flags.hasDog = false;
+        state.flags.dogLeft = true;
+        state.flags._dogLeftPending = true;
     }
 }
 
@@ -585,6 +613,8 @@ function applySleep(tier, opts = {}) {
     state.mental  = Math.min(100, state.mental  + q.mental);
     state.hunger  = Math.min(100, state.hunger  + q.hunger);
     state.hygiene = Math.min(100, state.hygiene + q.hygiene);
+    // A warm body against your back: every night is a little easier with the dog
+    if (state.flags.hasDog) state.mental = Math.min(100, state.mental + 4);
 
     if (q.fullWarmth) {
         state.warmth = state.maxWarmthCapacity;
@@ -608,9 +638,13 @@ function resolveRough(spot) {
         abandoned: { warmth: 16, risk: 0.40 } // warmer, but more dangerous
     };
     const s = SPOTS[spot] || SPOTS.underpass;
+    // The dog is a heater and a lookout: a little warmer, and fewer people
+    // walk up on a sleeper with a dog beside them
+    const dog = !!state.flags.hasDog;
     // The same spot gives back more or less depending on the season — a winter
     // underpass barely counts as shelter, a summer one almost does
-    const spotWarmth = s.warmth + seasonConfig().roughWarmth;
+    const spotWarmth = s.warmth + seasonConfig().roughWarmth + (dog ? 4 : 0);
+    const risk = dog ? s.risk * 0.6 : s.risk;
 
     // Without the sleeping bag — swept, abandoned, or stashed across town — a
     // rough night stops being rest and starts being endurance
@@ -628,7 +662,7 @@ function resolveRough(spot) {
         state.health = Math.min(100, state.health + 4);
         state.mental = Math.min(100, state.mental + 8);
         msg = "You and Ray split the night into watches — four hours down, four hours up, packs stacked between you. Nothing walks up on you. Nothing goes missing. The sleep you get is real sleep, because someone you trust is awake. Two people can hold a night that would eat one.";
-    } else if (Math.random() < s.risk) {
+    } else if (Math.random() < risk) {
         const roll = Math.random();
         if (roll < 0.45) {
             state.mental = Math.max(0, state.mental - 12);
@@ -733,11 +767,16 @@ const ROOM_TIERS = {
     }
 };
 
-// Returning the lost wallet earns a permanent 20% discount at the motel — the owner manages it
-function roomCost(tier) {
+// Returning the lost wallet earns a permanent 20% discount at the motel — the owner manages it.
+// The dog adds the motel's pet fee on top (after the discount); the Alcove won't take it at all.
+// opts.noPet skips the fee for a room the dog won't be in (putting Ray up).
+// Every price display and charge goes through here — nothing reads room.cost directly.
+function roomCost(tier, opts = {}) {
     const room = ROOM_TIERS[tier];
-    if (room.discountable && state.flags.returned_wallet) return Math.round(room.cost * 0.8);
-    return room.cost;
+    let cost = room.cost;
+    if (room.discountable && state.flags.returned_wallet) cost = Math.round(cost * 0.8);
+    if (state.flags.hasDog && !opts.noPet) cost += { motel: 10, motel_weekly: 40 }[tier] || 0;
+    return cost;
 }
 
 // The motel has a card reader; the Alcove has a cigar box. With the ATM card,
@@ -1161,6 +1200,13 @@ function loadScenario(id) {
         id = 'labor_office';
     }
 
+    // The dog left overnight: a morning the player has to face, but never ahead
+    // of the night or the work day — same floor as the season turn
+    if (!id && state.flags._dogLeftPending) {
+        state.flags._dogLeftPending = false;
+        id = 'dog_left';
+    }
+
     // Season turn: a one-time notice at the lowest priority — it never preempts
     // the office, the stash, or the night, and costs no time when it fires
     if (!id && (state.flags.seasonNoticedEpoch || 0) !== seasonEpoch()) {
@@ -1340,6 +1386,11 @@ function renderGear() {
         items.push(`Sleeping bag (stashed${daysOut > 0 ? ` — ${daysOut} day${daysOut === 1 ? '' : 's'} out` : ' today'})`);
     } else {
         items.push('Sleeping bag (carried)');
+    }
+
+    if (state.flags.hasDog) {
+        const fed = state.flags.dogFoodDays || 0;
+        items.push(fed > 0 ? `Dog (fed for ${fed} more day${fed === 1 ? '' : 's'})` : 'Dog (hungry)');
     }
 
     if (state.flags.hasPhone) {

@@ -1747,5 +1747,224 @@ const lateWalkHome = els['choices-list'].children.find(b => b.textContent.includ
 assert(lateWalkHome && lateWalkHome.disabled && lateWalkHome.textContent.includes('Closed until 8 AM'), 'after 19:00 the walk renders closed, not hidden');
 state.flags = {}; state.mailbox = []; state.citations = []; state.applications = [];
 
+
+// --- The dog: a companion you can keep ---
+const strayDog = scenarios.find(s => s.id === 'stray_dog');
+function dogReset(extra = {}) {
+    state.flags = Object.assign({ seasonNoticedEpoch: 0, lastLaborDay: 5, lastShelterPromptDay: 5 }, extra);
+    state.mailbox = []; state.citations = []; state.applications = [];
+    state.mode = 'goal'; state.day = 5; // autumn
+    state.flags.seasonNoticedEpoch = seasonEpoch();
+    topUp(); state.timeHour = 12; state.cash = 50; state.foodStash = 0;
+}
+function narrative() { return els['narrative-text'].innerHTML; }
+function findBtn(match) { return els['choices-list'].children.find(b => b.textContent.includes(match)); }
+
+// Two feedings unlock "Let it stay"; one doesn't
+dogReset();
+loadScenario('stray_dog');
+assert(!findBtn('Let it stay'), 'a stray you have never fed offers no "Let it stay"');
+clickChoice('Share some of your food');
+assert(state.flags.dogTrust === 1 && narrative().includes('licks your hand'), 'one feeding counts one trust');
+topUp(); loadScenario('stray_dog');
+assert(!findBtn('Let it stay') && !narrative().includes('waiting where you last saw it'), 'one feeding is not enough — the dog is still a stray');
+clickChoice('Share some of your food');
+assert(state.flags.dogTrust === 2, 'two feedings counted');
+topUp(); loadScenario('stray_dog');
+assert(narrative().includes('waiting where you last saw it'), 'after two feedings the same dog is waiting');
+assert(findBtn('Let it stay') && findBtn('Share some of your food') && findBtn('Just pet the dog') && findBtn('Shoo it away'), 'the waiting variant keeps the original choices and adds "Let it stay"');
+clickChoice('Let it stay');
+assert(state.flags.hasDog === true && state.flags.dogFoodDays === 1, 'letting it stay adopts the dog with one fed day');
+assert(!strayDog.condition(), 'stray_dog leaves the pool while the dog is yours');
+
+// Upkeep: food days count down, hungry mornings cost mental, three in a row and it leaves exactly once
+dogReset({ hasDog: true, dogFoodDays: 2 });
+state.mental = 100;
+advanceDay();
+assert(state.flags.dogFoodDays === 1 && state.flags.dogHungryDays === 0 && state.mental === 100, 'a fed morning spends a food day and costs nothing');
+advanceDay();
+assert(state.flags.dogFoodDays === 0 && state.flags.dogHungryDays === 0 && state.mental === 100, 'the last food day is spent');
+advanceDay();
+assert(state.flags.dogHungryDays === 1 && state.mental === 94 && state.flags.hasDog, 'first hungry morning: −6 mental, dog stays');
+advanceDay();
+assert(state.flags.dogHungryDays === 2 && state.mental === 88 && state.flags.hasDog, 'second hungry morning: −6 mental, dog stays');
+advanceDay();
+assert(state.flags.dogHungryDays === 3 && state.mental === 82, 'third hungry morning: −6 mental');
+assert(state.flags.hasDog === false && state.flags.dogLeft === true && state.flags._dogLeftPending === true, 'on the third hungry morning the dog leaves');
+advanceDay();
+assert(state.flags.dogHungryDays === 3 && state.mental === 82 && state.flags.dogLeft === true, 'once gone, the dog costs nothing more and leaves only once');
+// The forced dog_left scene plays once, costs no time, and the stray never returns
+state.flags.lastLaborDay = state.day; state.flags.lastShelterPromptDay = state.day; state.flags.seasonNoticedEpoch = seasonEpoch();
+state.timeHour = 12; state.mental = 82;
+const hourAtDogLeft = state.timeHour;
+loadScenario();
+assert(narrative().includes('The dog is gone'), 'dog_left forces on the next load');
+assert(state.mental === 67, 'dog_left costs 15 mental');
+assert(state.timeHour === hourAtDogLeft, 'dog_left costs no time');
+assert(state.flags._dogLeftPending === false, 'the pending flag is cleared');
+loadScenario();
+assert(!narrative().includes('The dog is gone'), 'dog_left fires only once');
+assert(!strayDog.condition(), 'stray_dog never returns after the dog has left');
+
+// Feeding at the store: hidden without the dog, $6 for four days with it
+dogReset();
+loadScenario('convenience_store');
+assert(!findBtn('bag of dog food'), 'no dog food on the shelf without a dog');
+dogReset({ hasDog: true, dogFoodDays: 0 });
+loadScenario('convenience_store');
+const kibbleBtn = findBtn('bag of dog food');
+assert(kibbleBtn && !kibbleBtn.disabled, 'with the dog the dog food is on the shelf');
+clickChoice('bag of dog food');
+assert(Math.abs(state.cash - 44) < 0.01 && state.flags.dogFoodDays === 4, 'dog food costs $6 and feeds the dog four days');
+assert(narrative().includes('register drawer'), 'buying dog food stays in the browse loop');
+dogReset({ hasDog: true });
+state.cash = 5;
+loadScenario('convenience_store');
+const poorKibble = findBtn('bag of dog food');
+assert(poorKibble && poorKibble.disabled && poorKibble.textContent.includes('Requires $6.00'), 'dog food is a door you can see but not afford');
+
+// Feeding from the stash: hidden without the dog; with it, one packed meal = one food day, no time
+dogReset(); state.foodStash = 1;
+loadScenario('find_meal');
+assert(!findBtn('Split a packed meal with the dog'), 'find_meal hides the split without a dog');
+loadScenario('idle_time');
+assert(!findBtn('Split a packed meal with the dog'), 'idle_time hides the split without a dog');
+for (const scene of ['find_meal', 'idle_time']) {
+    dogReset({ hasDog: true, dogFoodDays: 0 }); state.foodStash = 1; state.hunger = 60;
+    loadScenario(scene);
+    const hourBeforeSplit = state.timeHour;
+    // Pin the follow-up draw to find_meal (no entry effects) so only the split's own cost is measured
+    const realPick = pickRandomScenario;
+    pickRandomScenario = () => scenarios.find(s => s.id === 'find_meal');
+    clickChoice('Split a packed meal with the dog');
+    pickRandomScenario = realPick;
+    assert(state.foodStash === 0 && state.flags.dogFoodDays === 1, scene + ': splitting a meal spends it and feeds the dog a day');
+    assert(state.timeHour === hourBeforeSplit, scene + ': splitting a meal costs no time');
+    dogReset({ hasDog: true }); state.foodStash = 0;
+    loadScenario(scene);
+    const emptySplit = findBtn('Split a packed meal with the dog');
+    assert(emptySplit && emptySplit.disabled && emptySplit.textContent.includes('Nothing packed'), scene + ': an empty bag disables the split');
+}
+
+// The shelter and the Alcove take no dogs; without one they're unchanged
+dogReset({ hasDog: true }); state.timeHour = 19;
+loadScenario('find_shelter');
+const dogShelter = findBtn('downtown shelter');
+assert(dogShelter && dogShelter.disabled && dogShelter.textContent.includes('(No dogs allowed)'), 'with the dog the shelter is closed to you, with the label');
+state.cash = 100;
+loadScenario('rent_room');
+const dogAlcove = findBtn('Alcove');
+assert(dogAlcove && dogAlcove.disabled && dogAlcove.textContent.includes('(No dogs)'), 'with the dog the Alcove bunk is closed, with the label');
+assert(findBtn('room at the budget motel') && !findBtn('room at the budget motel').disabled, 'the motel still takes you and the dog');
+dogReset(); state.timeHour = 19;
+loadScenario('find_shelter');
+const noDogShelter = findBtn('downtown shelter');
+assert(noDogShelter && !noDogShelter.disabled, 'without the dog the shelter is open as before');
+loadScenario('rent_room');
+const noDogAlcove = findBtn('Alcove');
+assert(noDogAlcove && !noDogAlcove.disabled, 'without the dog the Alcove is open as before');
+state.timeHour = 22;
+loadScenario('find_shelter');
+const lateShelter = findBtn('downtown shelter');
+assert(lateShelter && lateShelter.disabled && lateShelter.textContent.includes('(Intake closed at 9 PM)'), 'without the dog the late label is still the intake hour');
+
+// roomCost adds the pet fee after the wallet discount
+dogReset();
+assert(roomCost('motel') === 50 && roomCost('motel_weekly') === 200 && roomCost('flophouse') === 18, 'base room prices unchanged without the dog');
+state.flags.hasDog = true;
+assert(roomCost('motel') === 60 && roomCost('motel_weekly') === 240 && roomCost('flophouse') === 18, 'the dog adds $10 nightly and $40 weekly at the motel');
+dogReset({ returned_wallet: true });
+assert(roomCost('motel') === 40 && roomCost('motel_weekly') === 160, 'the wallet discount alone');
+state.flags.hasDog = true;
+assert(roomCost('motel') === 50 && roomCost('motel_weekly') === 200, 'pet fee lands on top of the discounted price');
+assert(roomCost('motel', { noPet: true }) === 40 && roomCost('motel_weekly', { noPet: true }) === 160, 'noPet skips the fee but keeps the discount');
+
+// Ray's room is his: no pet fee on the sick-scene motel offer
+dogReset({ hasDog: true, metRay: true, streetRep: 1 }); state.cash = 100;
+loadScenario('ray_reciprocity');
+assert(findBtn('put him up at the motel tonight ($58.00)'), "Ray's motel offer is priced without the pet fee");
+const rayRoomBtn = findBtn('put him up at the motel');
+assert(rayRoomBtn && !rayRoomBtn.disabled, "Ray's offer is affordable at the fee-free price");
+
+// find_shelter "Rent a room": with the dog the gate reads combined funds against the motel price
+dogReset({ hasDog: true }); state.timeHour = 19; state.cash = 25;
+loadScenario('find_shelter');
+const rentPoor = findBtn('Rent a room');
+assert(rentPoor && rentPoor.disabled && rentPoor.textContent.includes('(Not enough money)'), 'with the dog and $25 the rent button is disabled — nothing behind it is affordable');
+state.cash = 60; state.timeHour = 19;
+loadScenario('find_shelter');
+assert(!findBtn('Rent a room').disabled, 'with the dog and $60 the motel is reachable');
+state.cash = 20; state.flags.hasBankAccount = true; state.flags.bankBalance = 50; state.timeHour = 19;
+loadScenario('find_shelter');
+assert(!findBtn('Rent a room').disabled, 'with the dog, the card counts toward the motel gate');
+dogReset(); state.timeHour = 19; state.cash = 17;
+loadScenario('find_shelter');
+const rentNoDog = findBtn('Rent a room');
+assert(rentNoDog && rentNoDog.disabled && rentNoDog.textContent.includes('(Requires $18.00)'), 'without the dog the $18 pocket-cash gate is unchanged');
+state.cash = 18; state.timeHour = 19;
+loadScenario('find_shelter');
+assert(!findBtn('Rent a room').disabled, 'without the dog $18 opens the door');
+
+// Rough sleep with the dog: reduced risk and a little more warmth
+dogReset(); state.timeHour = 22; state.warmth = 50;
+Math.random = () => 0.2; // 0.2 < 0.25 underpass risk: a bad night without the dog
+resolveRough('underpass');
+Math.random = origRandom;
+assert(!narrative().includes('the night passes'), 'at a 0.2 roll the underpass goes wrong without the dog');
+dogReset({ hasDog: true, dogFoodDays: 3 }); state.timeHour = 22; state.warmth = 50;
+Math.random = () => 0.2; // 0.2 >= 0.15 (0.25 × 0.6): the dog keeps the night quiet
+resolveRough('underpass');
+Math.random = origRandom;
+assert(narrative().includes('the night passes'), 'the same roll is a quiet night with the dog');
+dogReset(); state.timeHour = 22; state.warmth = 50;
+Math.random = () => 0.9; resolveRough('underpass'); Math.random = origRandom;
+const warmthNoDog = state.warmth;
+dogReset({ hasDog: true, dogFoodDays: 3 }); state.timeHour = 22; state.warmth = 50;
+Math.random = () => 0.9; resolveRough('underpass'); Math.random = origRandom;
+assert(Math.abs(state.warmth - (warmthNoDog + 4)) < 0.01, 'the dog adds 4 warmth to a rough night (' + warmthNoDog + ' -> ' + state.warmth + ')');
+
+// applySleep adds the morning mental bonus
+dogReset(); state.timeHour = 22; state.mental = 50;
+applySleep('shelter');
+assert(state.mental === 90, 'a shelter night from 50 mental restores to 90 without the dog');
+dogReset({ hasDog: true, dogFoodDays: 3 }); state.timeHour = 22; state.mental = 50;
+applySleep('shelter');
+assert(state.mental === 94, 'with the dog the morning adds 4 more');
+dogReset({ hasDog: true, dogFoodDays: 3 }); state.timeHour = 22; state.mental = 98;
+applySleep('rough');
+assert(state.mental === 100, 'the dog bonus clamps at 100');
+
+// dog_left never preempts the night or the work day
+dogReset({ _dogLeftPending: true, dogLeft: true, lastShelterPromptDay: 0 }); state.timeHour = 19;
+loadScenario();
+assert(narrative().includes('where you\'re spending the night') && state.flags._dogLeftPending === true, 'at nightfall find_shelter wins and dog_left stays pending');
+dogReset({ _dogLeftPending: true, dogLeft: true, hasJob: true, hireDay: 4, lastWorkDay: 0, nextPayday: 20, pendingWages: 0 }); state.timeHour = 8;
+loadScenario();
+assert(state.flags.lastWorkDay === state.day && state.flags._dogLeftPending === true, 'a work morning forces the warehouse gate and dog_left stays pending');
+assert(!narrative().includes('The dog is gone'), 'the dog scene did not play ahead of the shift');
+
+// Old saves with no dog flags load and behave as before
+dogReset({ hasMailingAddress: true }); state.timeHour = 12;
+saveGame();
+state.flags = { hasDog: true, dogFoodDays: 0 };
+continueGame();
+assert(state.flags.hasDog === undefined && state.flags.dogFoodDays === undefined && state.flags.dogLeft === undefined, 'an old save carries no dog flags after Continue');
+renderGear();
+assert(!els['gear-list'].innerHTML.includes('Dog'), 'no dog line in gear on an old save');
+assert(roomCost('motel') === 50, 'no pet fee on an old save');
+const mentalBeforeOldDay = state.mental;
+advanceDay();
+assert(state.flags.dogHungryDays === undefined && !state.flags.dogLeft && state.mental === mentalBeforeOldDay, 'advanceDay on an old save touches no dog state');
+assert(strayDog.condition(), 'the stray is still in the pool on an old save');
+
+// Gear list
+dogReset({ hasDog: true, dogFoodDays: 2 }); renderGear();
+assert(els['gear-list'].innerHTML.includes('Dog (fed for 2 more days)'), 'gear: fed for 2 more days');
+state.flags.dogFoodDays = 1; renderGear();
+assert(els['gear-list'].innerHTML.includes('Dog (fed for 1 more day)') && !els['gear-list'].innerHTML.includes('1 more days'), 'gear: fed for 1 more day');
+state.flags.dogFoodDays = 0; renderGear();
+assert(els['gear-list'].innerHTML.includes('Dog (hungry)'), 'gear: hungry');
+state.flags = {}; state.mailbox = []; state.citations = []; state.applications = [];
+
 console.log(failures === 0 ? '\nALL TESTS PASSED' : '\n' + failures + ' FAILURES');
 process.exit(failures === 0 ? 0 : 1);

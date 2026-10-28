@@ -149,6 +149,19 @@ function courthouseSlotChoices(i) {
     ];
 }
 
+// Feeding the dog from the pack — the same choice in find_meal and idle_time.
+// Costs no time, like eating from the stash; the dog's day is counted at dawn.
+const SHARE_MEAL_WITH_DOG = {
+    text: "Split a packed meal with the dog.",
+    hidden: () => !state.flags.hasDog,
+    requires: { stash: 1 },
+    customAction: () => {
+        state.flags.dogFoodDays = (state.flags.dogFoodDays || 0) + 1;
+        applyEffects({ foodStash: -1, timePassed: 0 });
+        loadScenario();
+    }
+};
+
 // The corner-store shelf — shared between the walk-in scene and the browse loop
 // so buying one thing doesn't bounce you out the door mid-errand
 const STORE_PURCHASES = [
@@ -156,6 +169,17 @@ const STORE_PURCHASES = [
     { text: "Pour a coffee from the self-serve machine ($2.00).", requires: { cash: 2.00 }, effects: { cash: -2.00, warmth: 20, mentalFortitude: 8, hunger: 5, timePassed: 0.1 }, nextScenario: 'convenience_store_browse' },
     { text: "Eat a cold-case sandwich at the window counter ($5.00).", requires: { cash: 5.00 }, effects: { cash: -5.00, hunger: 30, mentalFortitude: 5, warmth: 5, timePassed: 0.3 }, nextScenario: 'convenience_store_browse' },
     { text: "Buy a packaged meal to pack for later ($6.00).", requires: { cash: 6.00, stashSpace: true }, effects: { cash: -6.00, foodStash: 1, timePassed: 0.2 }, nextScenario: 'convenience_store_browse' },
+    {
+        // Four days of kibble — only on the shelf for someone with a dog to feed
+        text: "A bag of dog food ($6.00).",
+        hidden: () => !state.flags.hasDog,
+        requires: { cash: 6.00 },
+        customAction: () => {
+            state.flags.dogFoodDays = (state.flags.dogFoodDays || 0) + 4;
+            applyEffects({ cash: -6.00, timePassed: 0.1 });
+            loadScenario('convenience_store_browse');
+        }
+    },
     {
         text: "Buy a prepaid phone ($20.00).",
         requires: { cash: 20.00, notFlag: 'hasPhone', notFlagLabel: '(You already own a phone)' },
@@ -229,7 +253,8 @@ const scenarios = [
             { text: "Get a cup of hot coffee ($1.00)", requires: { cash: 1.00 }, effects: { cash: -1.00, health: 2, mentalFortitude: 15, warmth: 20, hunger: 5 } },
             { text: "Sit down for a full hot meal at the diner ($8.00)", requires: { cash: 8.00 }, effects: { cash: -8.00, health: 10, mentalFortitude: 20, warmth: 30, hunger: 70 } },
             { text: "Buy a to-go meal to pack for later ($4.00)", requires: { cash: 4.00, stashSpace: true }, effects: { cash: -4.00, foodStash: 1, timePassed: 0.3 } },
-            { text: "Eat a packed meal from your bag.", requires: { stash: 1 }, effects: { foodStash: -1, hunger: 35, mentalFortitude: 5, timePassed: 0.3 } }
+            { text: "Eat a packed meal from your bag.", requires: { stash: 1 }, effects: { foodStash: -1, hunger: 35, mentalFortitude: 5, timePassed: 0.3 } },
+            SHARE_MEAL_WITH_DOG
         ]
     },
     {
@@ -249,7 +274,11 @@ const scenarios = [
                     : "Try to get a bed at the downtown shelter.",
                 // Intake closes at 9 PM: night work costs your bed. Independent of
                 // the Ray/shelterFullDay logic — that's the other way this door dies.
-                requires: { check: () => state.timeHour >= 17 && state.timeHour < 21, checkLabel: '(Intake closed at 9 PM)' },
+                // The shelter takes no dogs either — a door you can see but can't open.
+                requires: {
+                    check: () => !state.flags.hasDog && state.timeHour >= 17 && state.timeHour < 21,
+                    checkLabel: () => state.flags.hasDog ? '(No dogs allowed)' : '(Intake closed at 9 PM)'
+                },
                 customAction: () => {
                     // On nights Ray called full, the walk over ends at a closed door
                     if (state.flags.shelterFullDay === state.day) {
@@ -264,7 +293,16 @@ const scenarios = [
             },
             { text: "Hunker down in an abandoned building for the night.", customAction: () => resolveRough('abandoned') },
             { text: "Head back to your motel room — it's paid through the week.", requires: { flag: 'motelDaysRemaining', flagLabel: '(No room paid up)' }, customAction: () => resolveRoom('motel', true) },
-            { text: "Rent a room for the night (from $18.00).", requires: { cash: 18.00 }, nextScenario: 'rent_room' }
+            // With the dog the Alcove is out, so the cheapest door is the motel —
+            // and the motel takes the card, so the gate reads combined funds
+            {
+                text: () => state.flags.hasDog ? `Rent a room for the night (from $${roomCost('motel').toFixed(2)}).` /* TODO: copy */ : "Rent a room for the night (from $18.00).",
+                requires: {
+                    check: () => state.flags.hasDog ? totalFunds() >= roomCost('motel') : state.cash >= 18,
+                    checkLabel: () => state.flags.hasDog ? '(Not enough money)' : '(Requires $18.00)'
+                },
+                nextScenario: 'rent_room'
+            }
         ]
     },
     {
@@ -281,7 +319,7 @@ const scenarios = [
             return text;
         },
         choices: [
-            { text: "A bunk at the Alcove flophouse ($18.00).", requires: { cash: 18.00 }, customAction: () => resolveRoom('flophouse') },
+            { text: "A bunk at the Alcove flophouse ($18.00).", requires: { cash: 18.00, check: () => !state.flags.hasDog, checkLabel: '(No dogs)' }, customAction: () => resolveRoom('flophouse') },
             { text: () => `A room at the budget motel ($${roomCost('motel').toFixed(2)}).`, requires: { funds: () => roomCost('motel') }, customAction: () => resolveRoom('motel') },
             { text: () => `Six nights at the motel, paid up front ($${roomCost('motel_weekly').toFixed(2)}).`, requires: { funds: () => roomCost('motel_weekly') }, customAction: () => resolveRoom('motel_weekly') },
             { text: "Too rich for tonight. Reconsider your options.", customAction: () => loadScenario('find_shelter') }
@@ -316,6 +354,7 @@ const scenarios = [
             { text: "Warm up with a cup of hot soup ($3.00)", requires: { cash: 3.00 }, effects: { cash: -3.00, health: 5, mentalFortitude: 15, warmth: 35, hunger: 30 } },
             { text: "Get a cup of hot coffee ($1.00)", requires: { cash: 1.00 }, effects: { cash: -1.00, health: 2, mentalFortitude: 15, warmth: 20, hunger: 5 } },
             { text: "Eat a packed meal from your bag.", requires: { stash: 1 }, effects: { foodStash: -1, hunger: 35, mentalFortitude: 5, timePassed: 0.3 } },
+            SHARE_MEAL_WITH_DOG,
             { text: "Stop by the convenience store on the corner.", effects: { timePassed: 0.2 }, nextScenario: 'convenience_store' },
             {
                 // Deliberate travel: the paperwork corner is a known place, not a
@@ -493,13 +532,51 @@ const scenarios = [
         id: 'stray_dog',
         notRandom: false,
         category: 'encounter',
-        text: "A scruffy stray dog approaches you, tail wagging cautiously. It looks hungry, but it's friendly.",
+        // Out of the pool while the dog is yours, and for good once it has
+        // left you. Two feedings earn its trust; then it's waiting for you.
+        condition: () => !state.flags.hasDog && !state.flags.dogLeft,
+        text: () => (state.flags.dogTrust || 0) >= 2
+            ? "The same scruffy dog is waiting where you last saw it, and it falls in beside you like that was already decided." // TODO: copy
+            : "A scruffy stray dog approaches you, tail wagging cautiously. It looks hungry, but it's friendly.",
         effects: { timePassed: 0.2 },
         choices: [
-            { text: "Share some of your food.", requires: { hunger: 50 }, effects: { hunger: -20, mentalFortitude: 20 }, nextScenario: 'dog_fed' },
+            {
+                text: "Share some of your food.",
+                requires: { hunger: 50 },
+                effects: { hunger: -20, mentalFortitude: 20 },
+                customAction: () => {
+                    state.flags.dogTrust = (state.flags.dogTrust || 0) + 1;
+                    loadScenario('dog_fed');
+                }
+            },
+            {
+                // hidden, not disabled: until it has eaten from your hand twice
+                // you don't know it would stay
+                text: "Let it stay with you.",
+                hidden: () => (state.flags.dogTrust || 0) < 2,
+                customAction: () => {
+                    state.flags.hasDog = true;
+                    state.flags.dogFoodDays = 1;
+                    loadScenario('dog_stays');
+                }
+            },
             { text: "Just pet the dog.", effects: { mentalFortitude: 10 }, nextScenario: 'dog_pet' },
             { text: "Shoo it away. You can't take care of yourself, let alone a dog.", effects: { mentalFortitude: -5 }, nextScenario: null }
         ]
+    },
+    {
+        id: 'dog_stays',
+        notRandom: true,
+        text: "The dog stays. It's yours now, which means it eats when you do.", // TODO: copy
+        choices: [ { text: "Keep walking.", nextScenario: null } ]
+    },
+    {
+        // Forced from loadScenario the morning after DOG_LEAVES_AFTER hungry days
+        id: 'dog_left',
+        notRandom: true,
+        text: "The dog is gone. It waited three hungry days, then went looking for someone who could feed it.", // TODO: copy
+        effects: { mentalFortitude: -15, timePassed: 0 },
+        choices: [ { text: "Keep walking.", nextScenario: null } ]
     },
     {
         id: 'dog_fed',
@@ -2473,14 +2550,15 @@ const scenarios = [
                 }
             },
             {
-                text: () => `Pharmacy run, and offer to put him up at the motel tonight ($${(8 + roomCost('motel')).toFixed(2)}).`,
-                requires: { cash: () => 8 + roomCost('motel') },
+                // The room is Ray's, so no pet fee on it
+                text: () => `Pharmacy run, and offer to put him up at the motel tonight ($${(8 + roomCost('motel', { noPet: true })).toFixed(2)}).`,
+                requires: { cash: () => 8 + roomCost('motel', { noPet: true }) },
                 customAction: () => {
                     state.flags.streetRep = (state.flags.streetRep || 0) + 1;
                     // Pride loses to a wet cough in winter; the rest of the year it's a coin worth less than even
                     const takesRoom = currentSeason() === 'winter' || Math.random() < 0.4;
                     if (takesRoom) {
-                        applyEffects({ cash: -(8 + roomCost('motel')), mentalFortitude: 10, timePassed: 2.5 });
+                        applyEffects({ cash: -(8 + roomCost('motel', { noPet: true })), mentalFortitude: 10, timePassed: 2.5 });
                         loadScenario('ray_room_taken');
                     } else {
                         // He waves the room off — only the pharmacy money is spent
